@@ -12,6 +12,16 @@ const supabase = createClient(
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI'
 );
 
+// Verificación de la conexión a Supabase
+(async () => {
+  const { data, error } = await supabase.from('conversations').select('*').limit(1);
+  if (error) {
+    console.error('Error conectando a Supabase:', error);
+  } else {
+    console.log('Conexión a Supabase exitosa:', data);
+  }
+})();
+
 // Webhook para recibir mensajes de WhatsApp
 app.post('/webhook', async (req, res) => {
   const messageData = req.body;  // Datos recibidos desde Gupshup
@@ -19,45 +29,54 @@ app.post('/webhook', async (req, res) => {
   // Para depuración, imprime el mensaje completo recibido
   console.log('Mensaje recibido completo:', JSON.stringify(messageData, null, 2));
 
-  // Validación básica: Verificar que sea un mensaje de tipo "text"
-  if (!messageData || !messageData.sender || !messageData.sender.payload) {
+  // Validación básica: Verificar que el evento tenga un payload
+  if (!messageData || !messageData.payload) {
     console.log('Mensaje o payload no encontrado en el evento');
     return res.status(400).send('Mensaje no válido');
   }
 
-  // Imprimir el contenido completo del payload para verificar su estructura
-  console.log('Payload recibido:', JSON.stringify(messageData.sender.payload, null, 2));
+  const { payload } = messageData;
+  const eventType = payload.type;
 
-  const message = messageData?.sender?.payload?.text;  // Texto del mensaje recibido
-  const phoneNumber = messageData?.destination;  // Número de teléfono del destinatario
+  if (eventType === 'message') {
+    const message = payload.text;  // Texto del mensaje recibido
+    const phoneNumber = payload.source;  // Número de teléfono del remitente
 
-  if (!message || !phoneNumber) {
-    console.log('No se recibió un mensaje válido');
-    return res.status(400).send('Mensaje no válido');
-  }
-
-  // Intentamos insertar el mensaje en la base de datos de Supabase
-  try {
-    const { data, error } = await supabase
-      .from('conversations')  // Inserta en la tabla 'conversations' de Supabase
-      .insert([
-        {
-          user_id: phoneNumber,  // Usamos el número de teléfono como ID del usuario
-          message: message,  // Insertamos el texto del mensaje
-          last_message_time: new Date().toISOString(),  // Fecha y hora del mensaje
-        }
-      ]);
-
-    if (error) {
-      console.error('Error guardando el mensaje en Supabase:', error);
-      return res.status(500).send('Error guardando el mensaje');
+    if (!message || !phoneNumber) {
+      console.log('No se recibió un mensaje válido');
+      return res.status(400).send('Mensaje no válido');
     }
 
-    console.log('Mensaje guardado correctamente:', data);  // Confirmación de que el mensaje se guardó correctamente
-    return res.status(200).send('Mensaje recibido y guardado');
-  } catch (err) {
-    console.error('Error procesando el webhook:', err);
-    return res.status(500).send('Error procesando el webhook');
+    // Intentamos insertar el mensaje en la base de datos de Supabase
+    try {
+      const { data, error } = await supabase
+        .from('conversations')  // Inserta en la tabla 'conversations' de Supabase
+        .insert([
+          {
+            user_id: phoneNumber,  // Usamos el número de teléfono como ID del usuario
+            message: message,  // Insertamos el texto del mensaje
+            last_message_time: new Date().toISOString(),  // Fecha y hora del mensaje
+          }
+        ]);
+
+      if (error) {
+        console.error('Error guardando el mensaje en Supabase:', error);
+        return res.status(500).send('Error guardando el mensaje');
+      }
+
+      console.log('Mensaje guardado correctamente:', data);  // Confirmación de que el mensaje se guardó correctamente
+      return res.status(200).send('Mensaje recibido y guardado');
+    } catch (err) {
+      console.error('Error procesando el webhook:', err);
+      return res.status(500).send('Error procesando el webhook');
+    }
+  } else if (eventType === 'message-event') {
+    console.log('Evento de mensaje recibido:', payload.type);
+    // Aquí puedes manejar eventos de tipo 'message-event' si es necesario
+    return res.status(200).send('Evento de mensaje recibido');
+  } else {
+    console.log('Tipo de evento no manejado:', eventType);
+    return res.status(400).send('Tipo de evento no manejado');
   }
 });
 
@@ -65,4 +84,3 @@ app.post('/webhook', async (req, res) => {
 app.listen(3000, () => {
   console.log('Servidor corriendo en http://localhost:3000');
 });
-
