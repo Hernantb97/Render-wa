@@ -1,4 +1,4 @@
-const { v5: uuidv5 } = require('uuid');  // Importa la función de UUIDv5
+const { v5: uuidv5 } = require('uuid');
 const express = require('express');
 const bodyParser = require('body-parser');
 const { createClient } = require('@supabase/supabase-js');
