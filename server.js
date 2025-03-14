@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
-const axios = require('axios');
 
 const app = express();
 app.use(express.json());  // Middleware para analizar los datos JSON
@@ -29,7 +28,7 @@ app.post('/webhook', async (req, res) => {
   const { payload } = messageData;
   const eventType = payload.type;
 
-  // Verificación y manejo de mensajes
+  // Verificación y manejo de mensajes de texto
   if (eventType === 'message' || eventType === 'text') {
     const message = payload.text;
     const phoneNumber = payload.source;
@@ -62,10 +61,14 @@ app.post('/webhook', async (req, res) => {
       console.error('❌ Error procesando el webhook:', err);
       return res.status(500).send('Error procesando el webhook');
     }
-  } else if (['delivered', 'sent', 'enqueued', 'message-event'].includes(eventType)) {
-    console.log(`📬 Evento de mensaje '${eventType}' recibido:`, payload);
+  } 
+  // Manejo de eventos de estado del mensaje
+  else if (['delivered', 'sent', 'enqueued', 'message-event'].includes(eventType)) {
+    console.log(`📬 Evento de mensaje '${eventType}' recibido:`, JSON.stringify(payload, null, 2));
     return res.status(200).send(`Evento '${eventType}' recibido`);
-  } else {
+  } 
+  // Tipo de evento no manejado
+  else {
     console.log('❌ Tipo de evento no manejado:', eventType);
     return res.status(400).send('Tipo de evento no manejado');
   }
