@@ -27,7 +27,7 @@ app.post('/webhook', async (req, res) => {
   // Intentamos extraer el mensaje y el número de teléfono
   let message = "";
   const phoneNumber = messageData?.destination;
-  
+
   // Intentamos extraer el mensaje solo si es un mensaje de tipo "text"
   if (messageData?.sender?.payload?.text) {
     message = messageData.sender.payload.text;  // Extrae el texto del mensaje
