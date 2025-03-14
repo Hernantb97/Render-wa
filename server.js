@@ -14,28 +14,41 @@ const supabase = createClient(
 
 // Función para extraer el número de teléfono de diferentes estructuras de mensaje
 const extractPhoneNumber = (messageData) => {
+  // Para mensajes entrantes
   if (messageData?.payload?.source) return messageData.payload.source;
   if (messageData?.payload?.sender?.phone) return messageData.payload.sender.phone;
+  // Para eventos de estado
   if (messageData?.payload?.destination) return messageData.payload.destination;
   return null;
 };
 
 // Función para extraer el texto del mensaje de diferentes estructuras
 const extractMessageText = (messageData) => {
-  if (messageData?.payload?.payload?.text) return messageData.payload.payload.text;
+  // Estructura normal
   if (messageData?.payload?.text) return messageData.payload.text;
+  // Estructura anidada
+  if (messageData?.payload?.payload?.text) return messageData.payload.payload.text;
   return null;
 };
 
 // Función para determinar el tipo de evento
 const getEventType = (messageData) => {
-  const mainType = messageData?.payload?.type || messageData?.type;
-  const isStatusEvent = ['delivered', 'sent', 'enqueued'].includes(mainType);
+  // Primero intentamos obtener el tipo del payload
+  const payloadType = messageData?.payload?.type;
+  // Si no existe, intentamos obtener el tipo principal
+  const mainType = messageData?.type;
   
-  if (mainType === 'message' || mainType === 'text') {
+  // Combinamos ambos para tener el tipo real
+  const actualType = payloadType || mainType;
+  
+  if (actualType === 'message' || actualType === 'text') {
     return 'message';
-  } else if (isStatusEvent || mainType === 'message-event') {
+  } else if (['delivered', 'sent', 'enqueued'].includes(actualType)) {
     return 'status';
+  } else if (actualType === 'message-event') {
+    // Para message-event, intentamos obtener el tipo específico
+    const specificType = messageData?.payload?.type;
+    return specificType || 'status';
   }
   return 'unknown';
 };
@@ -43,6 +56,7 @@ const getEventType = (messageData) => {
 // Función para guardar el mensaje en Supabase
 const saveMessageToSupabase = async (data) => {
   try {
+    console.log('Guardando en Supabase:', data);
     const { data: result, error } = await supabase
       .from('conversations')
       .insert([{
@@ -53,7 +67,10 @@ const saveMessageToSupabase = async (data) => {
         last_message_time: new Date().toISOString(),
       }]);
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error de Supabase:', error);
+      throw error;
+    }
     return result;
   } catch (error) {
     console.error('Error guardando en Supabase:', error);
@@ -68,11 +85,11 @@ app.post('/webhook', async (req, res) => {
     console.log('📩 Mensaje recibido completo:', JSON.stringify(messageData, null, 2));
 
     // Validación básica
-    if (!messageData || !messageData.payload) {
-      console.log('❌ Estructura de mensaje inválida');
+    if (!messageData) {
+      console.log('❌ No hay datos en el mensaje');
       return res.status(400).json({
         status: 'error',
-        message: 'Estructura de mensaje inválida'
+        message: 'No hay datos en el mensaje'
       });
     }
 
@@ -80,20 +97,27 @@ app.post('/webhook', async (req, res) => {
     const phoneNumber = extractPhoneNumber(messageData);
     const messageText = extractMessageText(messageData);
 
+    console.log('Datos procesados:', {
+      eventType,
+      phoneNumber,
+      messageText
+    });
+
     // Procesar según el tipo de evento
     switch (eventType) {
       case 'message':
-        if (!phoneNumber || !messageText) {
-          console.log('⚠️ Mensaje incompleto:', { phoneNumber, messageText });
+      case 'text':
+        if (!phoneNumber) {
+          console.log('⚠️ Mensaje sin número de teléfono:', messageData);
           return res.status(200).json({
             status: 'warning',
-            message: 'Mensaje recibido incompleto'
+            message: 'Mensaje sin número de teléfono'
           });
         }
 
         await saveMessageToSupabase({
           phoneNumber,
-          message: messageText,
+          message: messageText || 'Sin texto',
           eventType: 'message',
           status: 'received'
         });
@@ -101,7 +125,9 @@ app.post('/webhook', async (req, res) => {
         console.log('✅ Mensaje de texto guardado:', { phoneNumber, messageText });
         break;
 
-      case 'status':
+      case 'delivered':
+      case 'sent':
+      case 'enqueued':
         if (!phoneNumber) {
           console.log('⚠️ Evento de estado sin número de teléfono');
           return res.status(200).json({
@@ -110,15 +136,14 @@ app.post('/webhook', async (req, res) => {
           });
         }
 
-        const status = messageData.payload.type;
         await saveMessageToSupabase({
           phoneNumber,
-          message: `Status update: ${status}`,
+          message: `Status update: ${eventType}`,
           eventType: 'status',
-          status: status
+          status: eventType
         });
 
-        console.log('📬 Evento de estado procesado:', { phoneNumber, status });
+        console.log('📬 Evento de estado procesado:', { phoneNumber, eventType });
         break;
 
       default:
@@ -144,6 +169,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // Inicializamos el servidor en el puerto 3000
-app.listen(3000, () => {
-  console.log('🚀 Servidor corriendo en http://localhost:3000');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
