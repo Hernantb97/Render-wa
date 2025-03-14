@@ -12,65 +12,124 @@ const supabase = createClient(
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI'
 );
 
-// Webhook para recibir mensajes de WhatsApp
-app.post('/webhook', async (req, res) => {
-  const messageData = req.body;  // Datos recibidos desde Gupshup
+// Función para validar la estructura del mensaje
+const validateMessageStructure = (messageData) => {
+  if (!messageData || typeof messageData !== 'object') {
+    throw new Error('Mensaje inválido: estructura base no encontrada');
+  }
 
-  // Para depuración, imprime el mensaje completo recibido
-  console.log('📩 Mensaje recibido completo:', JSON.stringify(messageData, null, 2));
-
-  // Validación básica: Verificar que el evento tenga un payload
-  if (!messageData || !messageData.payload) {
-    console.log('❌ Mensaje o payload no encontrado en el evento');
-    return res.status(400).send('Mensaje no válido');
+  if (!messageData.payload || typeof messageData.payload !== 'object') {
+    throw new Error('Mensaje inválido: payload no encontrado o inválido');
   }
 
   const { payload } = messageData;
-  const eventType = payload.type;
+  
+  if (!payload.type) {
+    throw new Error('Mensaje inválido: tipo de evento no especificado');
+  }
 
-  // Verificación y manejo de mensajes de texto
-  if (eventType === 'message' || eventType === 'text') {
-    const message = payload.text;
-    const phoneNumber = payload.source;
+  return {
+    isValid: true,
+    payload
+  };
+};
 
-    if (!message || !phoneNumber) {
-      console.log('❌ No se recibió un mensaje válido');
-      return res.status(400).send('Mensaje no válido');
-    }
+// Función para normalizar el mensaje antes de guardarlo
+const normalizeMessage = (payload) => {
+  const phoneNumber = payload.source || payload.sender || payload.from;
+  let message = payload.text;
+  
+  // Si no hay texto pero hay un mensaje en payload.payload (casos especiales)
+  if (!message && payload.payload && payload.payload.text) {
+    message = payload.payload.text;
+  }
 
-    // Intentamos insertar el mensaje en la base de datos de Supabase
-    try {
-      const { data, error } = await supabase
-        .from('conversations')
-        .insert([
-          {
-            user_id: phoneNumber,
-            message: message,
-            last_message_time: new Date().toISOString(),
-          }
-        ]);
+  // Limpieza básica del mensaje
+  if (message) {
+    message = message.trim();
+  }
 
-      if (error) {
-        console.error('❌ Error guardando el mensaje en Supabase:', error);
-        return res.status(500).send('Error guardando el mensaje');
+  return {
+    phoneNumber,
+    message,
+    timestamp: new Date().toISOString()
+  };
+};
+
+// Función para guardar el mensaje en Supabase
+const saveMessageToSupabase = async (normalizedData) => {
+  const { phoneNumber, message, timestamp } = normalizedData;
+
+  if (!phoneNumber || !message) {
+    throw new Error('Datos insuficientes para guardar el mensaje');
+  }
+
+  const { data, error } = await supabase
+    .from('conversations')
+    .insert([
+      {
+        user_id: phoneNumber,
+        message: message,
+        last_message_time: timestamp,
+      }
+    ]);
+
+  if (error) {
+    throw new Error(`Error al guardar en Supabase: ${error.message}`);
+  }
+
+  return data;
+};
+
+// Webhook para recibir mensajes de WhatsApp
+app.post('/webhook', async (req, res) => {
+  try {
+    console.log('📩 Mensaje recibido:', JSON.stringify(req.body, null, 2));
+
+    // Validar estructura del mensaje
+    const { payload } = validateMessageStructure(req.body);
+    const eventType = payload.type.toLowerCase();
+
+    // Manejar diferentes tipos de eventos
+    if (['message', 'text'].includes(eventType)) {
+      // Normalizar datos del mensaje
+      const normalizedData = normalizeMessage(payload);
+      
+      if (!normalizedData.message) {
+        console.log('⚠️ Mensaje sin contenido de texto:', JSON.stringify(payload, null, 2));
+        return res.status(200).send('Mensaje recibido sin contenido de texto');
       }
 
-      console.log('✅ Mensaje guardado correctamente:', data);
-      return res.status(200).send('Mensaje recibido y guardado');
-    } catch (err) {
-      console.error('❌ Error procesando el webhook:', err);
-      return res.status(500).send('Error procesando el webhook');
+      // Guardar mensaje en Supabase
+      const savedData = await saveMessageToSupabase(normalizedData);
+      console.log('✅ Mensaje guardado exitosamente:', savedData);
+      
+      return res.status(200).json({
+        status: 'success',
+        message: 'Mensaje procesado y guardado correctamente'
+      });
+    } 
+    // Manejar eventos de estado
+    else if (['delivered', 'sent', 'enqueued', 'message-event'].includes(eventType)) {
+      console.log(`📬 Evento de estado recibido (${eventType}):`, JSON.stringify(payload, null, 2));
+      return res.status(200).json({
+        status: 'success',
+        message: `Evento de estado ${eventType} procesado`
+      });
+    } 
+    else {
+      console.log('⚠️ Tipo de evento no manejado:', eventType);
+      return res.status(200).json({
+        status: 'warning',
+        message: `Tipo de evento ${eventType} no requiere procesamiento`
+      });
     }
-  } 
-  // Manejo de eventos de estado del mensaje
-  else if (['delivered', 'sent', 'enqueued', 'message-event'].includes(eventType)) {
-    console.log(`📬 Evento de mensaje '${eventType}' recibido:`, JSON.stringify(payload, null, 2));
-    return res.status(200).send(`Evento '${eventType}' recibido`);
-  } 
-  // Tipo de evento no manejado
-  else {
-    console.log('❌ Tipo de evento no manejado:', eventType);
-    return res.status(400).send('Tipo de evento no manejado');
+  } catch (error) {
+    console.error('❌ Error en el webhook:', error.message);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
   }
 });
 
