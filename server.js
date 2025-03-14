@@ -7,12 +7,12 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 app.use(bodyParser.json());  // Middleware para analizar los datos JSON
 
-// Conexión con Supabase (USA LAS CLAVES QUE ME PROPORCIONASTE)
+// Conexión con Supabase (usa las claves que me proporcionaste)
 const supabase = createClient(
-  'https://wscijkxwevgxbgwhbqtm.supabase.co',  // Tu URL de Supabase
+  'https://wscijkxwevgxbgwhbqtm.supabase.co',  // URL de Supabase
   
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI'  
-// Tu API Key de Supabase
+// API Key de Supabase
 );
 
 // Definir un namespace único para generar UUID (puede ser cualquier valor único)
@@ -20,12 +20,15 @@ const NAMESPACE = 'com.myapp';  // Namespace único para la generación del UUID
 
 // Endpoint del webhook de Gupshup
 app.post('/webhook', async (req, res) => {
-  const messageData = req.body;  // Datos recibidos desde Gupshup
-  console.log('Mensaje recibido:', messageData);  // Para depuración
+  const messageData = req.body;
+  
+  // Mostrar todo el cuerpo del mensaje para depuración
+  console.log('Mensaje recibido:', JSON.stringify(messageData, null, 2));  // Muestra todo el cuerpo del mensaje de forma legible
 
   const message = messageData?.sender?.payload?.text;  // Extraer el texto del mensaje
   const phoneNumber = messageData?.destination;  // Extraer el número de teléfono
 
+  // Verificar si se recibe mensaje y número de teléfono
   if (!message || !phoneNumber) {
     console.log('No se recibió un mensaje válido');
     return res.status(400).send('Mensaje no válido');
@@ -34,7 +37,7 @@ app.post('/webhook', async (req, res) => {
   // Convertir el número de teléfono a UUID usando uuidv5
   const userId = uuidv5(phoneNumber, NAMESPACE);  // Generar UUID basado en el número de teléfono
 
-  // Insertar el mensaje en la base de datos de Supabase
+  // Intentar insertar el mensaje en la base de datos de Supabase
   try {
     const { data, error } = await supabase
       .from('conversations')  // Insertar en la tabla 'conversations' en Supabase
@@ -59,7 +62,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// Iniciar el servidor en el puerto 3000
+// Inicializamos el servidor en el puerto 3000
 app.listen(3000, () => {
   console.log('Servidor corriendo en http://localhost:3000');
 });
