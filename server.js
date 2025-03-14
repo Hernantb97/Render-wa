@@ -12,120 +12,130 @@ const supabase = createClient(
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI'
 );
 
-// Función para validar la estructura del mensaje
-const validateMessageStructure = (messageData) => {
-  if (!messageData || typeof messageData !== 'object') {
-    throw new Error('Mensaje inválido: estructura base no encontrada');
-  }
-
-  if (!messageData.payload || typeof messageData.payload !== 'object') {
-    throw new Error('Mensaje inválido: payload no encontrado o inválido');
-  }
-
-  const { payload } = messageData;
-  
-  if (!payload.type) {
-    throw new Error('Mensaje inválido: tipo de evento no especificado');
-  }
-
-  return {
-    isValid: true,
-    payload
-  };
+// Función para extraer el número de teléfono de diferentes estructuras de mensaje
+const extractPhoneNumber = (messageData) => {
+  if (messageData?.payload?.source) return messageData.payload.source;
+  if (messageData?.payload?.sender?.phone) return messageData.payload.sender.phone;
+  if (messageData?.payload?.destination) return messageData.payload.destination;
+  return null;
 };
 
-// Función para normalizar el mensaje antes de guardarlo
-const normalizeMessage = (payload) => {
-  const phoneNumber = payload.source || payload.sender || payload.from;
-  let message = payload.text;
+// Función para extraer el texto del mensaje de diferentes estructuras
+const extractMessageText = (messageData) => {
+  if (messageData?.payload?.payload?.text) return messageData.payload.payload.text;
+  if (messageData?.payload?.text) return messageData.payload.text;
+  return null;
+};
+
+// Función para determinar el tipo de evento
+const getEventType = (messageData) => {
+  const mainType = messageData?.payload?.type || messageData?.type;
+  const isStatusEvent = ['delivered', 'sent', 'enqueued'].includes(mainType);
   
-  // Si no hay texto pero hay un mensaje en payload.payload (casos especiales)
-  if (!message && payload.payload && payload.payload.text) {
-    message = payload.payload.text;
+  if (mainType === 'message' || mainType === 'text') {
+    return 'message';
+  } else if (isStatusEvent || mainType === 'message-event') {
+    return 'status';
   }
-
-  // Limpieza básica del mensaje
-  if (message) {
-    message = message.trim();
-  }
-
-  return {
-    phoneNumber,
-    message,
-    timestamp: new Date().toISOString()
-  };
+  return 'unknown';
 };
 
 // Función para guardar el mensaje en Supabase
-const saveMessageToSupabase = async (normalizedData) => {
-  const { phoneNumber, message, timestamp } = normalizedData;
+const saveMessageToSupabase = async (data) => {
+  try {
+    const { data: result, error } = await supabase
+      .from('conversations')
+      .insert([{
+        user_id: data.phoneNumber,
+        message: data.message,
+        message_type: data.eventType,
+        status: data.status,
+        last_message_time: new Date().toISOString(),
+      }]);
 
-  if (!phoneNumber || !message) {
-    throw new Error('Datos insuficientes para guardar el mensaje');
+    if (error) throw error;
+    return result;
+  } catch (error) {
+    console.error('Error guardando en Supabase:', error);
+    throw error;
   }
-
-  const { data, error } = await supabase
-    .from('conversations')
-    .insert([
-      {
-        user_id: phoneNumber,
-        message: message,
-        last_message_time: timestamp,
-      }
-    ]);
-
-  if (error) {
-    throw new Error(`Error al guardar en Supabase: ${error.message}`);
-  }
-
-  return data;
 };
 
 // Webhook para recibir mensajes de WhatsApp
 app.post('/webhook', async (req, res) => {
   try {
-    console.log('📩 Mensaje recibido:', JSON.stringify(req.body, null, 2));
+    const messageData = req.body;
+    console.log('📩 Mensaje recibido completo:', JSON.stringify(messageData, null, 2));
 
-    // Validar estructura del mensaje
-    const { payload } = validateMessageStructure(req.body);
-    const eventType = payload.type.toLowerCase();
-
-    // Manejar diferentes tipos de eventos
-    if (['message', 'text'].includes(eventType)) {
-      // Normalizar datos del mensaje
-      const normalizedData = normalizeMessage(payload);
-      
-      if (!normalizedData.message) {
-        console.log('⚠️ Mensaje sin contenido de texto:', JSON.stringify(payload, null, 2));
-        return res.status(200).send('Mensaje recibido sin contenido de texto');
-      }
-
-      // Guardar mensaje en Supabase
-      const savedData = await saveMessageToSupabase(normalizedData);
-      console.log('✅ Mensaje guardado exitosamente:', savedData);
-      
-      return res.status(200).json({
-        status: 'success',
-        message: 'Mensaje procesado y guardado correctamente'
-      });
-    } 
-    // Manejar eventos de estado
-    else if (['delivered', 'sent', 'enqueued', 'message-event'].includes(eventType)) {
-      console.log(`📬 Evento de estado recibido (${eventType}):`, JSON.stringify(payload, null, 2));
-      return res.status(200).json({
-        status: 'success',
-        message: `Evento de estado ${eventType} procesado`
-      });
-    } 
-    else {
-      console.log('⚠️ Tipo de evento no manejado:', eventType);
-      return res.status(200).json({
-        status: 'warning',
-        message: `Tipo de evento ${eventType} no requiere procesamiento`
+    // Validación básica
+    if (!messageData || !messageData.payload) {
+      console.log('❌ Estructura de mensaje inválida');
+      return res.status(400).json({
+        status: 'error',
+        message: 'Estructura de mensaje inválida'
       });
     }
+
+    const eventType = getEventType(messageData);
+    const phoneNumber = extractPhoneNumber(messageData);
+    const messageText = extractMessageText(messageData);
+
+    // Procesar según el tipo de evento
+    switch (eventType) {
+      case 'message':
+        if (!phoneNumber || !messageText) {
+          console.log('⚠️ Mensaje incompleto:', { phoneNumber, messageText });
+          return res.status(200).json({
+            status: 'warning',
+            message: 'Mensaje recibido incompleto'
+          });
+        }
+
+        await saveMessageToSupabase({
+          phoneNumber,
+          message: messageText,
+          eventType: 'message',
+          status: 'received'
+        });
+
+        console.log('✅ Mensaje de texto guardado:', { phoneNumber, messageText });
+        break;
+
+      case 'status':
+        if (!phoneNumber) {
+          console.log('⚠️ Evento de estado sin número de teléfono');
+          return res.status(200).json({
+            status: 'warning',
+            message: 'Evento de estado sin número de teléfono'
+          });
+        }
+
+        const status = messageData.payload.type;
+        await saveMessageToSupabase({
+          phoneNumber,
+          message: `Status update: ${status}`,
+          eventType: 'status',
+          status: status
+        });
+
+        console.log('📬 Evento de estado procesado:', { phoneNumber, status });
+        break;
+
+      default:
+        console.log('ℹ️ Tipo de evento no manejado:', eventType);
+        return res.status(200).json({
+          status: 'info',
+          message: `Tipo de evento no requiere procesamiento: ${eventType}`
+        });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Mensaje procesado correctamente'
+    });
+
   } catch (error) {
-    console.error('❌ Error en el webhook:', error.message);
+    console.error('❌ Error en el webhook:', error);
     return res.status(500).json({
       status: 'error',
       message: error.message
