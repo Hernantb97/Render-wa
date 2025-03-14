@@ -1,50 +1,35 @@
-const { v5: uuidv5 } = require('uuid');
-const express = require('express');
-const bodyParser = require('body-parser');
-const { createClient } = require('@supabase/supabase-js');
+const express = require('express');  // Asegúrate de que Express esté importado
+const bodyParser = require('body-parser');  // Asegúrate de que bodyParser esté importado
+const { createClient } = require('@supabase/supabase-js');  // Importa Supabase para la conexión
 
-// Inicializa la aplicación Express
 const app = express();
 app.use(bodyParser.json());  // Middleware para analizar los datos JSON
 
-// Conexión con Supabase (usa las claves que me proporcionaste)
-const supabase = createClient(
-  'https://wscijkxwevgxbgwhbqtm.supabase.co',  // URL de Supabase
-  
-'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI'  
-// API Key de Supabase
-);
+// Inicializa Supabase con la URL y la API key correctas
+const supabase = createClient('https://your-supabase-url.supabase.co', 'your-supabase-key');
 
-// Definir un namespace único para generar UUID (puede ser cualquier valor único)
-const NAMESPACE = 'com.myapp';  // Namespace único para la generación del UUID
-
-// Endpoint del webhook de Gupshup
+// Endpoint de Webhook
 app.post('/webhook', async (req, res) => {
-  const messageData = req.body;
-  
-  // Mostrar todo el cuerpo del mensaje para depuración
-  console.log('Mensaje recibido:', JSON.stringify(messageData, null, 2));  // Muestra todo el cuerpo del mensaje de forma legible
+  const messageData = req.body;  // Datos recibidos del webhook
+  console.log('Mensaje recibido:', JSON.stringify(messageData, null, 2));  // Muestra el mensaje completo de forma legible en los logs
 
-  const message = messageData?.sender?.payload?.text;  // Extraer el texto del mensaje
-  const phoneNumber = messageData?.destination;  // Extraer el número de teléfono
+  // Extraemos el mensaje y el número de teléfono
+  const message = messageData?.sender?.payload?.text;  // Extrae el texto del mensaje
+  const phoneNumber = messageData?.destination;  // Extrae el número de teléfono
 
-  // Verificar si se recibe mensaje y número de teléfono
   if (!message || !phoneNumber) {
-    console.log('No se recibió un mensaje válido');
+    console.log('No se recibió un mensaje válido');  // Si no hay mensaje o teléfono, retornar un error
     return res.status(400).send('Mensaje no válido');
   }
 
-  // Convertir el número de teléfono a UUID usando uuidv5
-  const userId = uuidv5(phoneNumber, NAMESPACE);  // Generar UUID basado en el número de teléfono
-
-  // Intentar insertar el mensaje en la base de datos de Supabase
+  // Intentamos insertar el mensaje en Supabase
   try {
     const { data, error } = await supabase
-      .from('conversations')  // Insertar en la tabla 'conversations' en Supabase
+      .from('conversations')  // Inserta en la tabla 'conversations' de Supabase
       .insert([
         {
-          user_id: userId,  // Usar el UUID generado a partir del número de teléfono
-          message: message,  // Insertar el texto del mensaje
+          user_id: phoneNumber,  // Usamos el número de teléfono como ID del usuario
+          message: message,  // Insertamos el texto del mensaje
           last_message_time: new Date().toISOString(),  // Fecha y hora actual
         }
       ]);
@@ -54,7 +39,7 @@ app.post('/webhook', async (req, res) => {
       return res.status(500).send('Error guardando el mensaje');
     }
 
-    console.log('Mensaje guardado correctamente:', data);  // Confirmación de que el mensaje fue guardado
+    console.log('Mensaje guardado correctamente:', data);  // Confirmación de que el mensaje se guardó correctamente
     return res.status(200).send('Mensaje recibido y guardado');
   } catch (err) {
     console.error('Error procesando el webhook:', err);
