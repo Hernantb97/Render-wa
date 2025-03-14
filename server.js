@@ -1,24 +1,35 @@
-app.post('/webhook', async (req, res) => {
-  const messageData = req.body;
-  console.log('Mensaje recibido:', messageData);  // Para depurar y ver la estructura
+const express = require('express');  // Asegúrate de que Express esté importado
+const bodyParser = require('body-parser');  // Asegúrate de que bodyParser esté importado
+const { createClient } = require('@supabase/supabase-js');  // Importa Supabase para la conexión
 
-  // Asegurémonos de que estamos extrayendo el mensaje y teléfono correctamente
-  const message = messageData?.sender?.payload?.text;  // Asegúrate de que el mensaje esté aquí
-  const phoneNumber = messageData?.destination;
+const app = express();
+app.use(bodyParser.json());  // Middleware para analizar los datos JSON
+
+// Inicializa Supabase con la URL y la API key correctas
+const supabase = createClient('https://your-supabase-url.supabase.co', 'your-supabase-key');
+
+// Endpoint de Webhook
+app.post('/webhook', async (req, res) => {
+  const messageData = req.body;  // Datos recibidos del webhook
+  console.log('Mensaje recibido:', messageData);  // Para depuración y asegurarnos de que los datos se reciben bien
+
+  // Extraemos el mensaje y el número de teléfono
+  const message = messageData?.sender?.payload?.text;  // Extrae el texto del mensaje
+  const phoneNumber = messageData?.destination;  // Extrae el número de teléfono
 
   if (!message || !phoneNumber) {
-    console.log('No se recibió un mensaje válido');
+    console.log('No se recibió un mensaje válido');  // Si no hay mensaje o teléfono, retornar un error
     return res.status(400).send('Mensaje no válido');
   }
 
-  // Insertar en Supabase
+  // Intentamos insertar el mensaje en Supabase
   try {
     const { data, error } = await supabase
-      .from('conversations')  // Tabla 'conversations' en Supabase
+      .from('conversations')  // Inserta en la tabla 'conversations' de Supabase
       .insert([
         {
-          user_id: phoneNumber,  // El número de teléfono del usuario
-          message: message,  // El texto del mensaje
+          user_id: phoneNumber,  // Usamos el número de teléfono como ID del usuario
+          message: message,  // Insertamos el texto del mensaje
           last_message_time: new Date().toISOString(),  // Fecha y hora actual
         }
       ]);
@@ -28,11 +39,16 @@ app.post('/webhook', async (req, res) => {
       return res.status(500).send('Error guardando el mensaje');
     }
 
-    console.log('Mensaje guardado correctamente:', data);
+    console.log('Mensaje guardado correctamente:', data);  // Confirmación de que el mensaje se guardó correctamente
     return res.status(200).send('Mensaje recibido y guardado');
   } catch (err) {
     console.error('Error procesando el webhook:', err);
     return res.status(500).send('Error procesando el webhook');
   }
+});
+
+// Inicializamos el servidor en el puerto 3000
+app.listen(3000, () => {
+  console.log('Servidor corriendo en http://localhost:3000');
 });
 
