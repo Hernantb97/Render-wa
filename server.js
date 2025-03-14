@@ -1,11 +1,10 @@
 // Requiere el paquete express
 const express = require('express');
-const bodyParser = require('body-parser');  // Se usa bodyParser para manejar el cuerpo de las solicitudes
-const { createClient } = require('@supabase/supabase-js');  // Importa Supabase para conectarse a la base de datos
+const bodyParser = require('body-parser');
+const { createClient } = require('@supabase/supabase-js');
 
-const app = express();  // Inicializa Express
-
-app.use(bodyParser.json());  // Usa el middleware de bodyParser para procesar el cuerpo de las solicitudes
+const app = express();
+app.use(bodyParser.json());
 
 // Crea el cliente de Supabase con tu URL y clave de API
 const supabase = createClient('https://wscijkxwevgxbgwhbqtm.supabase.co', 
@@ -14,9 +13,9 @@ const supabase = createClient('https://wscijkxwevgxbgwhbqtm.supabase.co',
 // Endpoint para recibir los mensajes
 app.post('/webhook', async (req, res) => {
   const messageData = req.body;  // Recibe el cuerpo del mensaje desde Gupshup
-  console.log('Mensaje recibido:', messageData);  // Muestra el mensaje en los logs para depuración
+  console.log('Mensaje recibido:', JSON.stringify(messageData, null, 2));  // Para depuración
 
-  // Extrae los datos del mensaje
+  // Verifica si hay un campo "sender" y si contiene un "payload" con "text"
   const message = messageData?.sender?.payload?.text;  // Mensaje de texto
   const phoneNumber = messageData?.destination;  // Número de teléfono
 
@@ -25,15 +24,15 @@ app.post('/webhook', async (req, res) => {
     return res.status(400).send('Mensaje no válido');
   }
 
-  // Intenta guardar el mensaje en la base de datos de Supabase
+  // Intentamos guardar el mensaje en la base de datos
   try {
     const { data, error } = await supabase
       .from('conversations')  // Tabla donde se guardan los mensajes
       .insert([
         {
-          user_id: phoneNumber,  // Guardar el número de teléfono como ID de usuario
+          user_id: phoneNumber,  // Guardar el número de teléfono como ID del usuario
           message: message,  // Guardar el texto del mensaje
-          last_message_time: new Date().toISOString(),  // Hora y fecha del mensaje
+          last_message_time: new Date().toISOString(),  // Fecha y hora del mensaje
         }
       ]);
 
