@@ -20,9 +20,9 @@ app.post('/webhook', async (req, res) => {
   // Para depuración, imprime el mensaje completo recibido
   console.log('Mensaje recibido completo:', JSON.stringify(messageData, null, 2));
 
-  // Validación básica: Verificar que sea un mensaje de tipo "text"
-  if (!messageData || !messageData.sender || !messageData.sender.payload || !messageData.sender.payload.text) {
-    console.log('No se encontró el campo "text" en el mensaje');
+  // Verificar que sea un mensaje de tipo "text" o eventos relacionados
+  if (!messageData?.sender?.payload?.text && messageData?.type !== "message-event") {
+    console.log('No se encontró el campo "text" en el mensaje o evento no es tipo "message-event"');
     return res.status(400).send('Mensaje no válido');
   }
 
