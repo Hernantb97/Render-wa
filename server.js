@@ -38,7 +38,6 @@ app.post('/webhook', async (req, res) => {
   const { payload } = messageData;
   const eventType = payload.type;
 
-  // Verificación y manejo de mensajes
   if (eventType === 'message' || eventType === 'text') {
     const message = payload.text;
     const phoneNumber = payload.source;
@@ -71,15 +70,10 @@ app.post('/webhook', async (req, res) => {
       console.error('Error procesando el webhook:', err);
       return res.status(500).send('Error procesando el webhook');
     }
-  } 
-  // Verificación y manejo de eventos de mensaje
-  else if (eventType === 'message-event') {
-    console.log('Evento de mensaje recibido:', payload.type);
-    // Aquí puedes manejar eventos de tipo 'message-event' si es necesario
-    return res.status(200).send('Evento de mensaje recibido');
-  } 
-  // Manejo de otros tipos de eventos
-  else {
+  } else if (['delivered', 'sent', 'enqueued', 'message-event'].includes(eventType)) {
+    console.log(`Evento de mensaje '${eventType}' recibido:`, payload);
+    return res.status(200).send(`Evento '${eventType}' recibido`);
+  } else {
     console.log('Tipo de evento no manejado:', eventType);
     return res.status(400).send('Tipo de evento no manejado');
   }
