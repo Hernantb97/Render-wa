@@ -5,24 +5,26 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 app.use(bodyParser.json());
 
+// Actualiza con tus claves correctas de Supabase
 const supabase = createClient('https://wscijkxwevgxbgwhbqtm.supabase.co', 
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI');
 
 // Endpoint para recibir mensajes
 app.post('/webhook', async (req, res) => {
   const messageData = req.body;  // Recibe el cuerpo del mensaje desde Gupshup
-  console.log('Mensaje recibido:', JSON.stringify(messageData, null, 2));  // Imprime el contenido del mensaje
 
-  // Extrae el mensaje completo, y verifica que el texto esté disponible
+  console.log('Mensaje recibido completo:', JSON.stringify(messageData, null, 2));  // Imprime todo el contenido del mensaje
+
+  // Intentamos extraer el texto del mensaje de una manera más robusta
   let message = "";
   if (messageData && messageData.sender && messageData.sender.payload) {
     if (messageData.sender.payload.text) {
-      message = messageData.sender.payload.text;  // Mensaje de texto
+      message = messageData.sender.payload.text;  // Extrae el texto del mensaje
     } else {
-      console.log('El campo "text" no está presente en el payload del mensaje.');
+      console.log('No se encontró el campo "text" en el mensaje');
     }
   } else {
-    console.log('Estructura inesperada del mensaje recibido:', messageData);
+    console.log('La estructura del mensaje es inesperada:', messageData);
   }
 
   const phoneNumber = messageData?.destination;  // Número de teléfono
