@@ -62,9 +62,10 @@ const saveMessageToSupabase = async (data) => {
       .insert([{
         user_id: data.phoneNumber,
         message: data.message,
-        message_type: data.eventType,
-        status: data.status,
         last_message_time: new Date().toISOString(),
+        // Comentamos temporalmente los nuevos campos hasta actualizar la base de datos
+        // message_type: data.eventType,
+        // status: data.status,
       }]);
 
     if (error) {
