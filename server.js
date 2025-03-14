@@ -6,7 +6,8 @@ const app = express();
 app.use(bodyParser.json());
 
 // Configura el cliente de Supabase
-const supabase = createClient('https://your-supabase-url.supabase.co', 'your-supabase-key');
+const supabase = createClient('https://wscijkxwevgxbgwhbqtm.supabase.co', 
+'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI');
 
 app.post('/webhook', async (req, res) => {
   const messageData = req.body;
