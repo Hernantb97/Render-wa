@@ -1,4 +1,3 @@
-// Requiere el paquete express
 const express = require('express');
 const bodyParser = require('body-parser');
 const { createClient } = require('@supabase/supabase-js');
@@ -6,17 +5,26 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 app.use(bodyParser.json());
 
-// Crea el cliente de Supabase con tu URL y clave de API
 const supabase = createClient('https://wscijkxwevgxbgwhbqtm.supabase.co', 
 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI');
 
-// Endpoint para recibir los mensajes
+// Endpoint para recibir mensajes
 app.post('/webhook', async (req, res) => {
   const messageData = req.body;  // Recibe el cuerpo del mensaje desde Gupshup
-  console.log('Mensaje recibido:', JSON.stringify(messageData, null, 2));  // Para depuración
+  console.log('Mensaje recibido:', JSON.stringify(messageData, null, 2));  // Imprime el contenido del mensaje
 
-  // Verifica si hay un campo "sender" y si contiene un "payload" con "text"
-  const message = messageData?.sender?.payload?.text;  // Mensaje de texto
+  // Extrae el mensaje completo, y verifica que el texto esté disponible
+  let message = "";
+  if (messageData && messageData.sender && messageData.sender.payload) {
+    if (messageData.sender.payload.text) {
+      message = messageData.sender.payload.text;  // Mensaje de texto
+    } else {
+      console.log('El campo "text" no está presente en el payload del mensaje.');
+    }
+  } else {
+    console.log('Estructura inesperada del mensaje recibido:', messageData);
+  }
+
   const phoneNumber = messageData?.destination;  // Número de teléfono
 
   if (!message || !phoneNumber) {
@@ -24,10 +32,10 @@ app.post('/webhook', async (req, res) => {
     return res.status(400).send('Mensaje no válido');
   }
 
-  // Intentamos guardar el mensaje en la base de datos
+  // Intentamos guardar el mensaje en Supabase
   try {
     const { data, error } = await supabase
-      .from('conversations')  // Tabla donde se guardan los mensajes
+      .from('conversations')
       .insert([
         {
           user_id: phoneNumber,  // Guardar el número de teléfono como ID del usuario
