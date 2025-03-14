@@ -38,9 +38,10 @@ app.post('/webhook', async (req, res) => {
   const { payload } = messageData;
   const eventType = payload.type;
 
+  // Verificación y manejo de mensajes
   if (eventType === 'message') {
-    const message = payload.text;  // Texto del mensaje recibido
-    const phoneNumber = payload.source;  // Número de teléfono del remitente
+    const message = payload.text;
+    const phoneNumber = payload.source;
 
     if (!message || !phoneNumber) {
       console.log('No se recibió un mensaje válido');
@@ -50,12 +51,12 @@ app.post('/webhook', async (req, res) => {
     // Intentamos insertar el mensaje en la base de datos de Supabase
     try {
       const { data, error } = await supabase
-        .from('conversations')  // Inserta en la tabla 'conversations' de Supabase
+        .from('conversations')
         .insert([
           {
-            user_id: phoneNumber,  // Usamos el número de teléfono como ID del usuario
-            message: message,  // Insertamos el texto del mensaje
-            last_message_time: new Date().toISOString(),  // Fecha y hora del mensaje
+            user_id: phoneNumber,
+            message: message,
+            last_message_time: new Date().toISOString(),
           }
         ]);
 
@@ -64,17 +65,20 @@ app.post('/webhook', async (req, res) => {
         return res.status(500).send('Error guardando el mensaje');
       }
 
-      console.log('Mensaje guardado correctamente:', data);  // Confirmación de que el mensaje se guardó correctamente
+      console.log('Mensaje guardado correctamente:', data);
       return res.status(200).send('Mensaje recibido y guardado');
     } catch (err) {
       console.error('Error procesando el webhook:', err);
       return res.status(500).send('Error procesando el webhook');
     }
-  } else if (eventType === 'message-event') {
+  } 
+  // Verificación y manejo de eventos de mensaje
+  else if (eventType === 'message-event') {
     console.log('Evento de mensaje recibido:', payload.type);
-    // Aquí puedes manejar eventos de tipo 'message-event' si es necesario
     return res.status(200).send('Evento de mensaje recibido');
-  } else {
+  } 
+  // Manejo de otros tipos de eventos
+  else {
     console.log('Tipo de evento no manejado:', eventType);
     return res.status(400).send('Tipo de evento no manejado');
   }
