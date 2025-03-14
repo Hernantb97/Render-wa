@@ -1,22 +1,23 @@
-const express = require('express');  // Asegúrate de que Express esté importado
+const express = require('express');  // Asegúrate de que Express esté importado 
 const bodyParser = require('body-parser');  // Asegúrate de que bodyParser esté importado
 const { createClient } = require('@supabase/supabase-js');  // Importa Supabase para la conexión
-
+          
 const app = express();
 app.use(bodyParser.json());  // Middleware para analizar los datos JSON
-
+         
 // Inicializa Supabase con la URL y la API key correctas
-const supabase = createClient('https://your-supabase-url.supabase.co', 'your-supabase-key');
-
+const supabase = createClient('https://wscijkxwevgxbgwhbqtm.supabase.co', 
+'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzY2lqa3h3ZXZneGJnd2hicXRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDE4MjI3NjgsImV4cCI6MjA1NzM5ODc2OH0._HSnvof7NUk6J__qqq3gJvbJRZnItCAmlI5HYAL8WVI');
+    
 // Endpoint de Webhook
 app.post('/webhook', async (req, res) => {
   const messageData = req.body;  // Datos recibidos del webhook
   console.log('Mensaje recibido:', messageData);  // Para depuración y asegurarnos de que los datos se reciben bien
-
+    
   // Extraemos el mensaje y el número de teléfono
   const message = messageData?.sender?.payload?.text;  // Extrae el texto del mensaje
   const phoneNumber = messageData?.destination;  // Extrae el número de teléfono
-
+    
   if (!message || !phoneNumber) {
     console.log('No se recibió un mensaje válido');  // Si no hay mensaje o teléfono, retornar un error
     return res.status(400).send('Mensaje no válido');
