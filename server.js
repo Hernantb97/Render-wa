@@ -20,8 +20,8 @@ app.post('/webhook', async (req, res) => {
   // Para depuración, imprime el mensaje completo recibido
   console.log('Mensaje recibido completo:', JSON.stringify(messageData, null, 2));
 
-  // Verificar si el mensaje contiene "text" o no y es de tipo "message-event"
-  if (messageData?.payload?.text) {
+  // Verificar si el mensaje contiene "text" y si el tipo es "message-event"
+  if (messageData?.payload?.type === 'message' && messageData?.payload?.text) {
     const phoneNumber = messageData?.destination;  // Número de teléfono del destinatario
     const message = messageData?.payload?.text;  // Texto del mensaje recibido
 
@@ -57,7 +57,7 @@ app.post('/webhook', async (req, res) => {
       return res.status(500).send('Error procesando el webhook');
     }
   } else {
-    console.log('Mensaje recibido no tiene texto o no es un mensaje válido');
+    console.log('Mensaje recibido no tiene texto o no es un evento de tipo "message-event"');
     return res.status(400).send('Mensaje no válido');
   }
 });
