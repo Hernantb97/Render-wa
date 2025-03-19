@@ -8,16 +8,16 @@
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 
-// Obtener variables de entorno
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+// Obtener variables de entorno (aceptando ambos formatos)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
 // Verificar que existan las variables de entorno
 if (!supabaseUrl || !supabaseKey) {
   console.error('❌ ERROR: Faltan las variables de entorno de Supabase');
   console.log('Por favor, configura las siguientes variables en Render:');
-  console.log('- NEXT_PUBLIC_SUPABASE_URL');
-  console.log('- NEXT_PUBLIC_SUPABASE_ANON_KEY');
+  console.log('- NEXT_PUBLIC_SUPABASE_URL o SUPABASE_URL');
+  console.log('- NEXT_PUBLIC_SUPABASE_ANON_KEY o SUPABASE_ANON_KEY');
   console.log('- GUPSHUP_API_KEY (opcional)');
   process.exit(1);
 }
