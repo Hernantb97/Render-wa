@@ -115,7 +115,7 @@ const saveMessageToSupabase = async (data) => {
         .insert([{
           user_id: data.phoneNumber,
           business_id: businessId,
-          message: data.message,
+          last_message: data.message,
           message_type: data.eventType || 'message',
           status: data.status || 'received',
           last_message_time: new Date().toISOString(),
@@ -139,7 +139,7 @@ const saveMessageToSupabase = async (data) => {
       const { error: updateError } = await supabase
         .from('conversations')
         .update({
-          message: data.message,
+          last_message: data.message,
           message_type: data.eventType || 'message',
           status: data.status || 'received',
           last_message_time: new Date().toISOString()
@@ -157,7 +157,7 @@ const saveMessageToSupabase = async (data) => {
       .from('messages')
       .insert([{
         conversation_id: conversationId,
-        message: data.message,
+        content: data.message,
         event_type: data.eventType || 'message',
         status: data.status || 'received',
         business_id: businessId,
