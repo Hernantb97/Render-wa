@@ -4,8 +4,24 @@ const bodyParser = require('body-parser');
 const { supabase } = require('./lib/supabase');
 const multer = require('multer');
 const fetch = require('node-fetch');
+const { generateAIResponse, shouldAIRespond } = require('./lib/ai-service');
 
 const app = express();
+
+// Configurar CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*'); // En producción, reemplaza * con tu dominio específico
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  // Manejar solicitudes OPTIONS (preflight)
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
+
 app.use(bodyParser.json());
 
 // Configurar bucket de Supabase Storage
@@ -83,6 +99,40 @@ const getEventType = (messageData) => {
     return specificType || 'status';
   }
   return 'unknown';
+};
+
+// Función para manejar eventos de tipo message-event (status updates)
+const handleMessageEvent = async (messageData) => {
+  try {
+    // Extraer el tipo específico del evento (delivered, sent, enqueued)
+    const eventType = messageData?.payload?.type || 'unknown';
+    console.log(`Procesando evento de tipo: ${eventType}`);
+    
+    // Extraer el número de destino (para identificar la conversación)
+    const destination = messageData?.payload?.destination;
+    if (!destination) {
+      console.log('No se pudo identificar el número de destino');
+      return false;
+    }
+    
+    // Extraer el ID del mensaje
+    const messageId = messageData?.payload?.id || messageData?.payload?.gsId;
+    if (!messageId) {
+      console.log('No se pudo identificar el ID del mensaje');
+      return false;
+    }
+    
+    console.log(`Actualizando estado para mensaje dirigido a ${destination} con ID ${messageId} a estado ${eventType}`);
+    
+    // No creamos un nuevo mensaje, solo actualizamos el estado
+    // Este código puede ser ampliado para buscar y actualizar mensajes específicos
+    // pero por ahora solo registramos que recibimos la actualización
+    
+    return true;
+  } catch (error) {
+    console.error('Error procesando evento de mensaje:', error);
+    return false;
+  }
 };
 
 // Función para guardar el mensaje en Supabase
@@ -249,11 +299,35 @@ app.post('/webhook', async (req, res) => {
     const messageData = req.body;
     console.log('Webhook - Mensaje recibido:', JSON.stringify(messageData, null, 2));
     
+    // Verificar si es un evento de tipo message-event (actualización de estado)
+    if (messageData.type === 'message-event') {
+      console.log('Detectado evento de actualización de estado (message-event)');
+      const handled = await handleMessageEvent(messageData);
+      
+      if (handled) {
+        return res.status(200).send('Status update processed successfully');
+      } else {
+        // Continuamos con el proceso normal aunque no hayamos manejado el evento específicamente
+        console.log('No se pudo manejar específicamente el evento de estado, continuando con proceso general');
+      }
+    }
+    
     // Variables para almacenar información extraída
     let userPhoneNumber = null;
     let businessPhoneNumber = null;
     let message = null;
     let phoneNumber = null;
+    let eventType = getEventType(messageData);
+    
+    // Para eventos de estado, intentamos extraer la información relevante
+    if (eventType === 'status' && messageData.payload) {
+      console.log('Procesando evento de estado:', eventType);
+      phoneNumber = messageData.payload.destination;
+      message = `[Estado del mensaje: ${messageData.payload.type || 'actualizado'}]`;
+      
+      // Para estos eventos, no creamos mensajes nuevos, solo enviamos una respuesta OK
+      return res.status(200).send('Status update acknowledged');
+    }
     
     // Estrategia 1: Formato oficial de WhatsApp API 
     if (messageData.messaging_product === 'whatsapp' && messageData.entry && messageData.entry.length > 0) {
@@ -489,7 +563,7 @@ app.post('/webhook', async (req, res) => {
         user_id: actualUserPhone,
         business_id: businessId,
         last_message: message,
-        last_message_time: new Date().toISOString(),
+            last_message_time: new Date().toISOString(),
         is_bot_active: true,
         sender_name: actualUserPhone
       };
@@ -528,6 +602,117 @@ app.post('/webhook', async (req, res) => {
     }
 
     console.log('Mensaje guardado exitosamente');
+    
+    // Comprobar si el bot está activo para esta conversación y debería responder
+    try {
+      // Obtener información de la conversación
+      const { data: conversationData, error: convDataError } = await supabase
+        .from('conversations')
+        .select('is_bot_active, business_id')
+        .eq('id', conversationId)
+        .single();
+        
+      if (convDataError) throw convDataError;
+      
+      // Comprobar si el bot debería responder
+      if (await shouldAIRespond(conversationId, conversationData.is_bot_active)) {
+        console.log(`El bot está activo para la conversación ${conversationId}, generando respuesta...`);
+        
+        // Obtener datos del negocio
+        const { data: businessData, error: bizError } = await supabase
+          .from('businesses')
+          .select('*')
+          .eq('id', conversationData.business_id)
+          .single();
+          
+        if (bizError) throw bizError;
+        
+        // Obtener los últimos mensajes para contexto
+        const { data: messageHistory, error: historyError } = await supabase
+          .from('messages')
+          .select('content, sender_type, created_at')
+          .eq('conversation_id', conversationId)
+          .order('created_at', { ascending: false })
+          .limit(10);
+          
+        if (historyError) throw historyError;
+        
+        // Invertir para orden cronológico
+        const orderedHistory = [...messageHistory].reverse();
+        
+        // Generar respuesta AI
+        const aiResponse = await generateAIResponse(orderedHistory, businessData);
+        
+        console.log(`Respuesta AI generada: ${aiResponse}`);
+        
+        // Guardar respuesta del bot
+        const { data: botMessageResult, error: botMessageError } = await supabase
+          .from('messages')
+          .insert([{
+            conversation_id: conversationId,
+            content: aiResponse,
+            sender_type: 'business',
+            created_at: new Date().toISOString(),
+            read: true
+          }]);
+          
+        if (botMessageError) throw botMessageError;
+        
+        // Actualizar último mensaje en la conversación
+        const { error: updateConvError } = await supabase
+          .from('conversations')
+          .update({
+            last_message: aiResponse,
+            last_message_time: new Date().toISOString()
+          })
+          .eq('id', conversationId);
+          
+        if (updateConvError) throw updateConvError;
+        
+        // NUEVO: Enviar el mensaje del bot a través de WhatsApp utilizando Gupshup
+        try {
+          if (businessData.gupshup_api_key) {
+            const gupshupPayload = {
+              channel: "whatsapp",
+              source: businessData.whatsapp_number,
+              destination: actualUserPhone,
+              message: {
+                type: "text",
+                text: aiResponse
+              }
+            };
+            
+            const gupshupResponse = await fetch('https://api.gupshup.io/sm/api/v1/msg', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'apikey': businessData.gupshup_api_key
+              },
+              body: JSON.stringify(gupshupPayload)
+            });
+            
+            if (!gupshupResponse.ok) {
+              console.error(`Error enviando respuesta automática a través de Gupshup: ${gupshupResponse.status} ${gupshupResponse.statusText}`);
+            } else {
+              console.log('Respuesta del bot enviada exitosamente a través de Gupshup');
+            }
+          } else {
+            console.log('No se encontró clave de API Gupshup para el negocio, no se pudo enviar la respuesta automática');
+          }
+        } catch (gupshupError) {
+          console.error('Error enviando respuesta del bot a través de Gupshup:', gupshupError);
+          // No interrumpimos el flujo principal, solo registramos el error
+        }
+        
+        console.log('Respuesta del bot guardada exitosamente');
+      } else {
+        console.log(`El bot está desactivado para la conversación ${conversationId}, no se generará respuesta automática.`);
+      }
+    } catch (aiError) {
+      console.error('Error al procesar respuesta del bot:', aiError);
+      // No devolvemos error al cliente, simplemente registramos el problema
+    }
+    
     return res.status(200).send('Message received and saved');
   } catch (error) {
     console.error('Error en webhook:', error);
@@ -615,7 +800,7 @@ app.get('/test-messages', async (req, res) => {
       `)
       .order('last_message_time', { ascending: false });
 
-    if (error) {
+      if (error) {
       console.error('Error obteniendo mensajes:', error);
       return res.status(500).json({
         status: 'error',
@@ -796,7 +981,387 @@ app.get('/check-phone/:phone', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 4000;
+// Endpoint para enviar mensajes a través de WhatsApp
+app.post('/send-whatsapp-message', async (req, res) => {
+  try {
+    const { phoneNumber, message, conversationId, businessId } = req.body;
+    
+    if (!phoneNumber || !message || !conversationId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Se requieren phoneNumber, message y conversationId'
+      });
+    }
+    
+    console.log(`Intentando enviar mensaje a ${phoneNumber}: ${message}`);
+    
+    // Obtener el negocio
+    let businessData;
+    if (businessId) {
+      const { data, error } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('id', businessId)
+        .single();
+        
+      if (error) throw error;
+      businessData = data;
+    } else {
+      // Obtener el business_id de la conversación
+      const { data: convData, error: convError } = await supabase
+        .from('conversations')
+        .select('business_id')
+        .eq('id', conversationId)
+        .single();
+        
+      if (convError) throw convError;
+      
+      const { data: bizData, error: bizError } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('id', convData.business_id)
+        .single();
+        
+      if (bizError) throw bizError;
+      businessData = bizData;
+    }
+    
+    // Enviar el mensaje a través de WhatsApp (ejemplo utilizando Gupshup)
+    if (businessData.gupshup_api_key) {
+      // Si usamos Gupshup
+      const gupshupPayload = {
+        channel: "whatsapp",
+        source: businessData.whatsapp_number,
+        destination: phoneNumber,
+        message: {
+          type: "text",
+          text: message
+        }
+      };
+      
+      // Implementar llamada a Gupshup
+      // Esta es una implementación de ejemplo, deberás adaptarla según la API de Gupshup
+      const response = await fetch('https://api.gupshup.io/sm/api/v1/msg', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': businessData.gupshup_api_key
+        },
+        body: JSON.stringify(gupshupPayload)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Error enviando mensaje a través de Gupshup: ${response.status} ${response.statusText}`);
+      }
+    } else {
+      // Implementación para API oficial de WhatsApp
+      console.log('No se encontró clave de API Gupshup, no se pudo enviar el mensaje');
+      // Aquí podrías implementar el envío a través de la API oficial de WhatsApp
+    }
+    
+    // Guardar el mensaje como agente en la base de datos
+    const { error: messageError } = await supabase
+      .from('messages')
+      .insert([{
+        conversation_id: conversationId,
+        content: message,
+        sender_type: 'business', // Aseguramos que sea 'business', no 'agent'
+        created_at: new Date().toISOString(),
+        read: true
+      }]);
+      
+    if (messageError) throw messageError;
+    
+    // Actualizar la conversación
+    const { error: updateError } = await supabase
+      .from('conversations')
+      .update({
+        last_message: message,
+        last_message_time: new Date().toISOString()
+      })
+      .eq('id', conversationId);
+      
+    if (updateError) throw updateError;
+    
+    res.json({
+      status: 'success',
+      message: 'Mensaje enviado correctamente'
+    });
+    
+  } catch (error) {
+    console.error('Error enviando mensaje de WhatsApp:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para obtener mensajes de una conversación específica
+app.get('/conversation-messages/:conversationId', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    console.log(`Obteniendo mensajes para la conversación ${conversationId}`);
+    
+    // Primero obtenemos información de la conversación para saber si el bot está activo
+    const { data: conversation, error: convError } = await supabase
+      .from('conversations')
+      .select('is_bot_active')
+      .eq('id', conversationId)
+      .single();
+      
+    if (convError) throw convError;
+    
+    const { data: messages, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true });
+    
+    if (error) throw error;
+    
+    // Añadir metadatos para identificar las respuestas automáticas
+    const enhancedMessages = messages.map(msg => {
+      // Mensajes del tipo 'bot' son automáticos por definición
+      if (msg.sender_type === 'bot') {
+        return { ...msg, is_auto_response: true };
+      }
+      
+      // Mensajes de tipo 'business' podrían ser automáticos o no
+      if (msg.sender_type === 'business' && conversation.is_bot_active) {
+        // Señales de que puede ser una respuesta automática
+        const botIndicators = [
+          msg.content.includes('Respuesta automática:'),
+          msg.content.includes('AI:'),
+          msg.content.startsWith('✅ Bot activado'),
+          msg.content.startsWith('❌ Bot desactivado')
+        ];
+        
+        return { 
+          ...msg, 
+          is_auto_response: botIndicators.some(indicator => indicator)
+        };
+      }
+      
+      return { ...msg, is_auto_response: false };
+    });
+    
+    console.log(`Se encontraron ${messages.length} mensajes para la conversación ${conversationId}`);
+    
+    return res.json({
+      status: 'success',
+      messages: enhancedMessages
+    });
+    
+  } catch (error) {
+    console.error('Error obteniendo mensajes:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+// Endpoint para registrar respuestas del bot en Supabase
+app.post('/register-bot-response', async (req, res) => {
+  try {
+    let { conversationId, message, timestamp = new Date().toISOString() } = req.body;
+    
+    if (!conversationId || !message) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Se requieren conversationId y message' 
+      });
+    }
+
+    console.log(`🤖 Registrando respuesta del bot para conversación ${conversationId}`);
+    
+    // Verificar si el conversationId es un número de teléfono
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(conversationId)) {
+      console.log('El conversationId parece ser un número de teléfono, buscando conversación...');
+      
+      // Buscar la conversación por número de teléfono (user_id)
+      const { data: conversation, error: convError } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('user_id', conversationId)
+        .order('last_message_time', { ascending: false })
+        .maybeSingle();
+        
+      if (convError) {
+        console.error('Error buscando conversación por número de teléfono:', convError);
+        return res.status(500).json({ success: false, message: 'Error al buscar conversación', error: convError });
+      }
+      
+      if (!conversation) {
+        console.error(`No se encontró conversación para el número de teléfono ${conversationId}`);
+        return res.status(404).json({ success: false, message: 'No se encontró conversación para este número' });
+      }
+      
+      console.log(`Conversación encontrada con ID: ${conversation.id}`);
+      conversationId = conversation.id;
+    }
+
+    // Insertar mensaje en Supabase
+    const { data, error } = await supabase
+      .from('messages')
+      .insert([
+        {
+          conversation_id: conversationId,
+          content: message,
+          sender_type: 'bot',
+          created_at: timestamp,
+          read: true
+        }
+      ]);
+
+    if (error) {
+      console.error('Error al guardar respuesta del bot en Supabase:', error);
+      return res.status(500).json({ success: false, message: 'Error al guardar en la base de datos', error });
+    }
+
+    // Actualizar la conversación con el último mensaje
+    const { error: updateError } = await supabase
+      .from('conversations')
+      .update({
+        last_message: message,
+        last_message_time: timestamp
+      })
+      .eq('id', conversationId);
+      
+    if (updateError) {
+      console.error('Error al actualizar la conversación:', updateError);
+      // No retornamos error para no afectar la respuesta principal
+    }
+
+    console.log(`✅ Respuesta del bot registrada correctamente`);
+    return res.status(200).json({ success: true, message: 'Respuesta del bot registrada correctamente' });
+  } catch (error) {
+    console.error('Error en endpoint /register-bot-response:', error);
+    res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
+  }
+});
+
+// Endpoint para obtener todas las conversaciones
+app.get('/api/conversations', async (req, res) => {
+  try {
+    const { businessId } = req.query;
+    
+    console.log(`Obteniendo conversaciones${businessId ? ` para el negocio ${businessId}` : ''} desde Supabase`);
+    
+    // Construimos la consulta base
+    let query = supabase
+      .from('conversations')
+      .select('*');
+    
+    // Filtramos por ID de negocio si se proporciona
+    if (businessId) {
+      query = query.eq('business_id', businessId);
+    }
+    
+    // Ordenamos por fecha del último mensaje
+    const { data: conversations, error } = await query.order('last_message_time', { ascending: false });
+    
+    if (error) {
+      console.error('Error obteniendo conversaciones:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+    
+    // Formatear las conversaciones para el cliente
+    const formattedConversations = conversations.map(conv => ({
+      id: conv.id,
+      name: conv.user_id || 'Usuario',  // Usar el número de teléfono o ID como nombre por defecto
+      phone: conv.user_id,
+      lastMessage: conv.last_message || '',
+      timestamp: conv.last_message_time || conv.created_at,
+      unread: conv.unread_count || 0,
+      status: 'offline',
+      isBusinessAccount: false,
+      labels: [],
+      colorLabel: '',
+      botActive: conv.is_bot_active || true,
+      tag: conv.tag || 'gray'
+    }));
+    
+    console.log(`Se encontraron ${formattedConversations.length} conversaciones`);
+    
+    return res.json({
+      success: true,
+      conversations: formattedConversations
+    });
+    
+  } catch (error) {
+    console.error('Error en API de conversaciones:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener mensajes de una conversación específica
+app.get('/api/messages/:conversationId', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    console.log(`Obteniendo mensajes para la conversación ${conversationId} desde Supabase`);
+    
+    // Verificar si el ID parece ser un UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(conversationId)) {
+      console.log(`El ID ${conversationId} no parece ser un UUID válido. Devolviendo lista vacía.`);
+      return res.json({
+        success: true,
+        messages: []
+      });
+    }
+    
+    // Obtener todos los mensajes de la conversación
+    const { data: messages, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true });
+    
+    if (error) {
+      console.error('Error obteniendo mensajes:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+    
+    // Formatear los mensajes para el cliente
+    const formattedMessages = messages.map(msg => ({
+      id: msg.id,
+      conversationId: msg.conversation_id,
+      content: msg.content,
+      timestamp: msg.created_at,
+      status: 'delivered',
+      sender: msg.sender_type === 'user' ? 'them' : 'me',
+      type: msg.message_type || 'text'
+    }));
+    
+    console.log(`Se encontraron ${formattedMessages.length} mensajes para la conversación ${conversationId}`);
+    
+    return res.json({
+      success: true,
+      messages: formattedMessages
+    });
+    
+  } catch (error) {
+    console.error('Error en API de mensajes:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -811,16 +1376,8 @@ app.use((err, req, res, next) => {
 const server = app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 }).on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`⚠️ El puerto ${PORT} está en uso. Intentando con otro puerto...`);
-    server.close();
-    // Try next port
-    app.listen(PORT + 1, () => {
-      console.log(`🚀 Servidor corriendo en puerto ${PORT + 1}`);
-    });
-  } else {
-    console.error('Error al iniciar el servidor:', err);
-  }
+  console.error(`⚠️ Error al iniciar el servidor en puerto ${PORT}:`, err.message);
+  process.exit(1);
 });
 
 // Handle process termination
