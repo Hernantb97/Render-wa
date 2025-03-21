@@ -841,6 +841,26 @@ app.get('/', (req, res) => {
   });
 });
 
+// Ruta de prueba para verificar que el servidor está funcionando
+app.get('/ping', (req, res) => {
+  console.log('🔔 Ping recibido');
+  res.status(200).json({ 
+    success: true, 
+    message: 'Pong! El servidor está funcionando correctamente',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Ruta de prueba para verificar register-bot-response
+app.get('/test-register-bot-response', (req, res) => {
+  console.log('🔔 Prueba de register-bot-response recibida');
+  res.status(200).json({ 
+    success: true, 
+    message: 'La ruta está configurada correctamente. Usa POST para enviar datos reales.',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Endpoint específico para Gupshup
 app.post('/gupshup-webhook', async (req, res) => {
   try {
@@ -1163,11 +1183,16 @@ app.get('/conversation-messages/:conversationId', async (req, res) => {
 });
 
 // Endpoint para registrar respuestas del bot en Supabase
+// NOTA: Esta funcionalidad ha sido movida a /app/api/register-bot-response/route.ts
+// Esta implementación está desactivada para evitar conflictos
+/* 
 app.post('/register-bot-response', async (req, res) => {
+  console.log('🔄 POST a /register-bot-response recibido', JSON.stringify(req.body, null, 2));
   try {
     let { conversationId, message, timestamp = new Date().toISOString() } = req.body;
     
     if (!conversationId || !message) {
+      console.log('❌ Error: Faltan datos - conversationId:', conversationId, 'message:', message);
       return res.status(400).json({ 
         success: false, 
         message: 'Se requieren conversationId y message' 
@@ -1241,6 +1266,17 @@ app.post('/register-bot-response', async (req, res) => {
     console.error('Error en endpoint /register-bot-response:', error);
     res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
   }
+});
+*/
+
+// Nueva ruta para pruebas de comunicación del bot
+app.post('/test-bot-connection', (req, res) => {
+  console.log('🔄 Prueba de conexión del bot recibida:', req.body);
+  res.status(200).json({ 
+    success: true, 
+    message: 'Conexión con el servidor exitosa',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Endpoint para obtener todas las conversaciones

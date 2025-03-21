@@ -64,22 +64,43 @@ El proyecto está configurado para desplegarse automáticamente en Render cuando
 
 Este proyecto contiene el bot de WhatsApp para CUPRA, diseñado para interactuar con clientes a través de WhatsApp.
 
-## Configuración de la URL del Panel de Control
+## Configuración del Bot de WhatsApp
 
-Para que el bot pueda registrar correctamente las respuestas en el panel de control, **actualiza la URL en el código del bot** de la siguiente manera:
+### Conexión con el Panel de Control
 
-1. Busca en el código del bot donde se define la URL para registrar respuestas (archivo que contiene la llamada a `/register-bot-response`).
+Para que el bot de WhatsApp pueda registrar las conversaciones en el panel de control, debes configurar la URL del panel correctamente:
 
-2. Reemplaza la URL actual:
-   ```js
-   // Reemplazar esto:
-   const controlPanelUrl = 'https://tu-app-real.onrender.com/register-bot-response';
-   
-   // Por esto:
-   const controlPanelUrl = 'https://tu-app-real.onrender.com/register-bot-response';
-   ```
+1. En el código del bot de WhatsApp, busca la variable de entorno `CONTROL_PANEL_URL` o la definición equivalente.
 
-   La URL debe seguir siendo la misma, pero asegúrate de que apunte al servidor Express que está funcionando correctamente.
+2. Establece la URL completa del panel de control incluyendo la ruta `/register-bot-response`:
+
+```js
+// Ejemplo en el archivo .env del bot
+CONTROL_PANEL_URL=https://tu-panel-control.onrender.com/register-bot-response
+```
+
+### Verificación de la Conexión
+
+Para verificar que la comunicación entre el bot y el panel de control funciona correctamente:
+
+1. Puedes realizar una prueba enviando una solicitud a la ruta `/test-bot`:
+
+```bash
+curl -X POST https://tu-panel-control.onrender.com/test-bot \
+  -H "Content-Type: application/json" \
+  -d '{"test": "mensaje de prueba"}'
+```
+
+2. Verifica los logs del servidor para confirmar que la solicitud fue recibida.
+
+### Solución de Problemas
+
+Si encuentras errores 404 al registrar mensajes:
+
+1. Verifica que la URL del panel de control sea correcta y esté accesible.
+2. Asegúrate de que el endpoint `/register-bot-response` esté definido correctamente.
+3. Revisa los logs del servidor para identificar posibles errores.
+4. Confirma que el middleware está redirigiendo correctamente las solicitudes.
 
 ## Verificación de la conexión
 
@@ -87,14 +108,6 @@ Para verificar que la conexión funciona correctamente, puedes:
 
 1. Revisar los logs del bot para confirmar que las respuestas se registran correctamente en el panel de control.
 2. Verificar en el panel de control que los mensajes aparecen en las conversaciones.
-
-## Solución de problemas
-
-Si sigues teniendo problemas con el error 404:
-
-1. Verifica que el servidor del panel de control esté corriendo correctamente
-2. Confirma que la ruta `/register-bot-response` está definida y accesible
-3. Asegúrate de que no haya problemas de CORS que impidan la comunicación entre el bot y el panel
 
 ## Información técnica
 

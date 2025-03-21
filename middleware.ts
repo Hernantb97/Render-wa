@@ -10,16 +10,23 @@ export async function middleware(request: NextRequest) {
   // Obtener la ruta
   const path = request.nextUrl.pathname;
 
-  // Si la ruta es /register-bot-response, redirigir a /api/register-bot-response
+  console.log('🔍 Middleware ejecutándose para:', path);
+  
+  // Rutas de API de bot para redireccionar a Next.js API
   if (path === '/register-bot-response') {
+    console.log('⏩ Redirigiendo /register-bot-response a /api/register-bot-response');
     return NextResponse.rewrite(new URL('/api/register-bot-response', request.url));
   }
-
-  console.log('Middleware ejecutándose para:', path);
   
+  // Redireccionar ruta de prueba
+  if (path === '/test-bot') {
+    console.log('⏩ Redirigiendo /test-bot a /api/test-bot');
+    return NextResponse.rewrite(new URL('/api/test-bot', request.url));
+  }
+
   // Si es una solicitud para el dashboard directamente, permitirla
   if (path === '/dashboard') {
-    console.log('Acceso directo al dashboard permitido');
+    console.log('🔓 Acceso directo al dashboard permitido');
     return NextResponse.next();
   }
   
@@ -55,18 +62,18 @@ export async function middleware(request: NextRequest) {
     data: { session },
   } = await supabase.auth.getSession()
 
-  console.log('Sesión encontrada:', !!session);
+  console.log('🔐 Sesión encontrada:', !!session);
 
   // Si el usuario no está autenticado y trata de acceder a una ruta protegida
   if (!session && path.startsWith('/dashboard')) {
-    console.log('Usuario no autenticado intentando acceder a ruta protegida');
+    console.log('⛔ Usuario no autenticado intentando acceder a ruta protegida');
     const redirectUrl = new URL('/login', request.url)
     return NextResponse.redirect(redirectUrl)
   }
 
   // Si el usuario está autenticado y trata de acceder a login
   if (session && path === '/login') {
-    console.log('Usuario autenticado intentando acceder a login');
+    console.log('🔄 Usuario autenticado intentando acceder a login');
     const redirectUrl = new URL('/dashboard', request.url)
     return NextResponse.redirect(redirectUrl)
   }
@@ -75,5 +82,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/login', '/dashboard', '/register-bot-response']
+  matcher: ['/dashboard/:path*', '/login', '/dashboard', '/register-bot-response', '/test-bot']
 } 
