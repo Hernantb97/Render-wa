@@ -76,31 +76,41 @@ Para que el bot de WhatsApp pueda registrar las conversaciones en el panel de co
 
 ```js
 // Ejemplo en el archivo .env del bot
-CONTROL_PANEL_URL=https://tu-panel-control.onrender.com/register-bot-response
+CONTROL_PANEL_URL=https://render-wa.onrender.com/register-bot-response
 ```
+
+> **IMPORTANTE**: En los logs actuales del bot vemos que está usando `https://render-wa.onrender.com/register-bot-response`. Asegúrate de que esta URL coincida con el dominio real de tu panel de control en Render.
 
 ### Verificación de la Conexión
 
 Para verificar que la comunicación entre el bot y el panel de control funciona correctamente:
 
-1. Puedes realizar una prueba enviando una solicitud a la ruta `/test-bot`:
+1. Puedes realizar una prueba usando el script de verificación incluido:
 
 ```bash
-curl -X POST https://tu-panel-control.onrender.com/test-bot \
+# Ejecutar el script de verificación de rutas
+node verify-routes.js
+```
+
+2. También puedes probar manualmente con curl:
+
+```bash
+curl -X POST https://render-wa.onrender.com/test-bot \
   -H "Content-Type: application/json" \
   -d '{"test": "mensaje de prueba"}'
 ```
 
-2. Verifica los logs del servidor para confirmar que la solicitud fue recibida.
+3. Verifica los logs del servidor para confirmar que la solicitud fue recibida.
 
 ### Solución de Problemas
 
 Si encuentras errores 404 al registrar mensajes:
 
-1. Verifica que la URL del panel de control sea correcta y esté accesible.
-2. Asegúrate de que el endpoint `/register-bot-response` esté definido correctamente.
-3. Revisa los logs del servidor para identificar posibles errores.
-4. Confirma que el middleware está redirigiendo correctamente las solicitudes.
+1. Verifica que el dominio correcto está configurado tanto en el bot como en el panel de control.
+2. Ejecuta `node verify-routes.js` para diagnosticar posibles problemas.
+3. Asegúrate de que los cambios están desplegados correctamente en Render.
+4. Revisa la configuración del archivo `render.yaml` para confirmar las rutas.
+5. Confirma que el middleware está redirigiendo correctamente las solicitudes.
 
 ## Verificación de la conexión
 

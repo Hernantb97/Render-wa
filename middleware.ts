@@ -13,14 +13,14 @@ export async function middleware(request: NextRequest) {
   console.log('🔍 Middleware ejecutándose para:', path);
   
   // Rutas de API de bot para redireccionar a Next.js API
-  if (path === '/register-bot-response') {
-    console.log('⏩ Redirigiendo /register-bot-response a /api/register-bot-response');
+  if (path === '/register-bot-response' || path === '/api/register-bot-response') {
+    console.log('⏩ Redirigiendo cualquier variante de /register-bot-response a /api/register-bot-response');
     return NextResponse.rewrite(new URL('/api/register-bot-response', request.url));
   }
   
-  // Redireccionar ruta de prueba
-  if (path === '/test-bot') {
-    console.log('⏩ Redirigiendo /test-bot a /api/test-bot');
+  // Redireccionar ruta de prueba - capturar cualquier variación
+  if (path === '/test-bot' || path === '/api/test-bot') {
+    console.log('⏩ Redirigiendo cualquier variante de /test-bot a /api/test-bot');
     return NextResponse.rewrite(new URL('/api/test-bot', request.url));
   }
 
@@ -82,5 +82,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/login', '/dashboard', '/register-bot-response', '/test-bot']
+  matcher: ['/dashboard/:path*', '/login', '/dashboard', '/register-bot-response', '/test-bot', '/api/register-bot-response', '/api/test-bot']
 } 

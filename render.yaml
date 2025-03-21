@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: panel-control-whatsapp
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+    routes:
+      - type: rewrite
+        source: /register-bot-response
+        destination: /api/register-bot-response
+      - type: rewrite
+        source: /test-bot
+        destination: /api/test-bot 
