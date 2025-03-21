@@ -10,71 +10,79 @@ const fs = require('fs');
 console.log('🔨 Iniciando el proceso de despliegue personalizado para Render');
 
 // Ejecutar diagnóstico primero
-console.log('📊 Ejecutando diagnóstico...');
+console.log('📊 Ejecutando diagnóstico básico...');
 try {
-  require('./render-diagnose');
+  // Solo ejecutamos un diagnóstico simple, no el completo
+  console.log(`Directorio actual: ${process.cwd()}`);
+  console.log(`Node.js version: ${process.version}`);
+  
+  // Verificar archivos críticos
+  const hasPackageJson = fs.existsSync('package.json');
+  const hasNextConfig = fs.existsSync('next.config.mjs') || fs.existsSync('next.config.js');
+  const hasAppDir = fs.existsSync('app');
+  
+  console.log(`package.json existe: ${hasPackageJson ? 'Sí' : 'No'}`);
+  console.log(`next.config.* existe: ${hasNextConfig ? 'Sí' : 'No'}`);
+  console.log(`app/ directorio existe: ${hasAppDir ? 'Sí' : 'No'}`);
+  
+  // Ejecutar ls -la para mejor diagnóstico
+  try {
+    const lsOutput = execSync('ls -la', { encoding: 'utf8' });
+    console.log('Contenido del directorio:');
+    console.log(lsOutput);
+  } catch (error) {
+    console.log(`Error al listar directorio: ${error.message}`);
+  }
 } catch (error) {
-  console.log('⚠️ Error al ejecutar diagnóstico:', error);
+  console.log('⚠️ Error en diagnóstico básico:', error);
   // Continuamos de todas formas
 }
 
-// Verificar si estamos en el directorio correcto para el build
-let projectRootFound = false;
-try {
-  // Comprobar si estamos en el directorio correcto buscando app/ y/o next.config.*
-  const hasAppDir = fs.existsSync('app') && fs.existsSync('app/page.tsx');
-  const hasNextConfig = fs.existsSync('next.config.js') || fs.existsSync('next.config.mjs');
-  const hasPackageJson = fs.existsSync('package.json');
-  
-  projectRootFound = hasNextConfig && hasPackageJson && (hasAppDir || fs.existsSync('pages'));
-  
-  if (!projectRootFound) {
-    console.log('❌ No estamos en el directorio raíz del proyecto Next.js');
-    console.log('Buscando directorio raíz del proyecto...');
+// Función segura para verificar si un directorio es válido para Next.js
+function isValidNextJsRoot(dir) {
+  try {
+    // Un directorio raíz válido debe tener package.json y uno de estos:
+    // 1. Un directorio app/ con archivos dentro
+    // 2. Un directorio pages/ con archivos dentro
+    // 3. Un archivo next.config.js o next.config.mjs
     
-    // Buscar el directorio raíz del proyecto
-    const findCommand = "find . -type d -name 'app' -o -name 'pages' | sort";
-    const result = execSync(findCommand, { encoding: 'utf8' });
-    
-    if (result.trim()) {
-      const possiblePaths = result.trim().split('\n');
-      console.log('Posibles directorios encontrados:', possiblePaths);
-      
-      // Intentar cambiar al directorio que parece ser la raíz del proyecto
-      for (const dirPath of possiblePaths) {
-        const parentDir = path.dirname(dirPath);
-        if (parentDir === '.') continue; // Ya estamos en la raíz
-        
-        console.log(`Intentando cambiar al directorio: ${parentDir}`);
-        try {
-          process.chdir(parentDir);
-          console.log(`✅ Cambiado al directorio: ${process.cwd()}`);
-          projectRootFound = true;
-          break;
-        } catch (error) {
-          console.log(`❌ Error al cambiar al directorio ${parentDir}:`, error.message);
-        }
-      }
+    // NO consideramos ningún directorio dentro de node_modules
+    if (dir.includes('node_modules')) {
+      console.log(`Ignorando directorio dentro de node_modules: ${dir}`);
+      return false;
     }
+    
+    const packageJsonPath = path.join(dir, 'package.json');
+    const hasPackageJson = fs.existsSync(packageJsonPath);
+    
+    if (!hasPackageJson) return false;
+    
+    // Verificar al menos uno de los criterios de Next.js
+    const appDirPath = path.join(dir, 'app');
+    const pagesDirPath = path.join(dir, 'pages');
+    const nextConfigJsPath = path.join(dir, 'next.config.js');
+    const nextConfigMjsPath = path.join(dir, 'next.config.mjs');
+    
+    const hasNextConfig = fs.existsSync(nextConfigJsPath) || fs.existsSync(nextConfigMjsPath);
+    const hasAppDir = fs.existsSync(appDirPath) && fs.readdirSync(appDirPath).length > 0;
+    const hasPagesDir = fs.existsSync(pagesDirPath) && fs.readdirSync(pagesDirPath).length > 0;
+    
+    return hasNextConfig || hasAppDir || hasPagesDir;
+  } catch (error) {
+    console.log(`Error al verificar directorio ${dir}:`, error);
+    return false;
   }
-} catch (error) {
-  console.log('❌ Error al buscar el directorio raíz del proyecto:', error);
 }
 
-// Verificar nuevamente después de posibles cambios de directorio
-const hasAppDir = fs.existsSync('app');
-const hasPagesDir = fs.existsSync('pages');
-const hasNextConfig = fs.existsSync('next.config.js') || fs.existsSync('next.config.mjs');
+// NUNCA cambiamos del directorio raíz proporcionado por Render
+// Simplemente verificamos si estamos en el directorio correcto
+const isValidRoot = isValidNextJsRoot(process.cwd());
 
-console.log('📁 Estado actual del proyecto:');
-console.log(`- Directorio app/ existe: ${hasAppDir ? 'Sí' : 'No'}`);
-console.log(`- Directorio pages/ existe: ${hasPagesDir ? 'Sí' : 'No'}`);
-console.log(`- Configuración Next.js existe: ${hasNextConfig ? 'Sí' : 'No'}`);
-
-if (!hasAppDir && !hasPagesDir) {
-  console.log('❗ ADVERTENCIA: No se encontró ningún directorio app/ o pages/ válido.');
+if (!isValidRoot) {
+  console.log('⚠️ No parece que estemos en un directorio raíz válido de Next.js');
+  console.log('Continuando de todas formas sin cambiar de directorio');
   
-  // Intentar crear estructura mínima si no existe
+  // Intentar crear estructura mínima si no hay ninguna
   try {
     if (!fs.existsSync('app')) {
       console.log('🛠️ Creando estructura mínima de app/ para permitir el build...');
@@ -114,6 +122,17 @@ export default function Home() {
   }
 }
 
+// Si necesitamos ejecutar un servidor Express, lo hacemos aquí
+if (fs.existsSync('server.js') && !fs.existsSync('next.config.mjs') && !fs.existsSync('next.config.js')) {
+  console.log('🚀 Detectado servidor Express (server.js). Iniciando servidor Express...');
+  try {
+    require('./server.js');
+    return; // Terminamos la ejecución aquí si estamos iniciando el servidor Express
+  } catch (error) {
+    console.error('❌ Error al iniciar servidor Express:', error);
+  }
+}
+
 // Verificar si existe el directorio .next
 const nextDir = path.join(process.cwd(), '.next');
 if (!fs.existsSync(nextDir) || !fs.existsSync(path.join(nextDir, 'build-manifest.json'))) {
@@ -125,7 +144,19 @@ if (!fs.existsSync(nextDir) || !fs.existsSync(path.join(nextDir, 'build-manifest
     console.log('✅ Build completado exitosamente');
   } catch (error) {
     console.error('❌ Error durante el build:', error);
-    process.exit(1);
+    console.log('🔄 Intentando iniciar servidor Express como alternativa...');
+    
+    if (fs.existsSync('server.js')) {
+      try {
+        require('./server.js');
+        return; // Terminamos la ejecución aquí
+      } catch (serverError) {
+        console.error('❌ Error al iniciar servidor Express:', serverError);
+        process.exit(1);
+      }
+    } else {
+      process.exit(1);
+    }
   }
 } else {
   console.log('✅ Directorio .next ya existe con un build válido');
