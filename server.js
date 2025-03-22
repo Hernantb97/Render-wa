@@ -1182,24 +1182,20 @@ app.get('/conversation-messages/:conversationId', async (req, res) => {
   }
 });
 
-// Endpoint para registrar respuestas del bot en Supabase
-// NOTA: Esta funcionalidad ha sido movida a /app/api/register-bot-response/route.ts
-// Esta implementación está desactivada para evitar conflictos
-/* 
+// Ruta para registrar respuestas del bot en Supabase (la misma implementación que está en app/api/register-bot-response/route.ts)
 app.post('/register-bot-response', async (req, res) => {
-  console.log('🔄 POST a /register-bot-response recibido', JSON.stringify(req.body, null, 2));
   try {
-    let { conversationId, message, timestamp = new Date().toISOString() } = req.body;
+    const body = req.body;
+    let { conversationId, message, timestamp = new Date().toISOString() } = body;
+    
+    console.log('🤖 Registrando respuesta del bot para conversación', conversationId);
     
     if (!conversationId || !message) {
-      console.log('❌ Error: Faltan datos - conversationId:', conversationId, 'message:', message);
       return res.status(400).json({ 
         success: false, 
         message: 'Se requieren conversationId y message' 
       });
     }
-
-    console.log(`🤖 Registrando respuesta del bot para conversación ${conversationId}`);
     
     // Verificar si el conversationId es un número de teléfono
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1267,7 +1263,17 @@ app.post('/register-bot-response', async (req, res) => {
     res.status(500).json({ success: false, message: 'Error interno del servidor', error: error.message });
   }
 });
-*/
+
+// Ruta de prueba para test-bot
+app.post('/test-bot', (req, res) => {
+  console.log('🧪 POST a /test-bot recibido', JSON.stringify(req.body, null, 2));
+  res.status(200).json({
+    success: true,
+    message: 'Datos recibidos correctamente por el servidor Express',
+    received: req.body,
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Nueva ruta para pruebas de comunicación del bot
 app.post('/test-bot-connection', (req, res) => {
