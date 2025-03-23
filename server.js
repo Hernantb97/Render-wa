@@ -1761,7 +1761,7 @@ app.post('/send-whatsapp-message-via-render', async (req, res) => {
       
       // 2. Enviar el mensaje a través del servidor de Render
       // IMPORTANTE: Reemplaza esta URL con la URL real de tu servidor en Render
-      const renderServerUrl = 'https://panel-control-whatsapp.onrender.com/send-whatsapp-message-proxy';
+      const renderServerUrl = 'https://render-wa.onrender.com/send-whatsapp-message-proxy';
       
       console.log('🔄 Enviando solicitud al servidor de Render:', renderServerUrl);
       
