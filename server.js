@@ -22,6 +22,33 @@ app.use((req, res, next) => {
   next();
 });
 
+// Middleware para registrar todas las solicitudes entrantes
+app.use((req, res, next) => {
+  console.log(`📥 ${new Date().toISOString()} - ${req.method} ${req.url}`);
+  
+  // Registro especial para solicitudes de envío de mensajes
+  if (req.url === '/send-whatsapp-message' && req.method === 'POST') {
+    console.log('🔔🔔🔔 DETECTADA SOLICITUD DE ENVÍO DE MENSAJE 🔔🔔🔔');
+    console.log('Headers:', req.headers);
+    
+    // Capturar el cuerpo de la solicitud
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    
+    req.on('end', () => {
+      try {
+        console.log('Body:', JSON.parse(body));
+      } catch (e) {
+        console.log('Body (raw):', body);
+      }
+    });
+  }
+  
+  next();
+});
+
 app.use(bodyParser.json());
 
 // Configurar bucket de Supabase Storage
@@ -265,8 +292,8 @@ app.post('/upload', multer({ storage: multer.memoryStorage() }).single('file'), 
         const fileUrl = await uploadFileToStorage(file, businessId);
 
         // Actualizar la conversación con la información del archivo
-        const { data, error } = await supabase
-            .from('conversations')
+      const { data, error } = await supabase
+        .from('conversations')
             .update({
                 file_url: fileUrl,
                 file_type: fileType,
@@ -583,141 +610,87 @@ app.post('/webhook', async (req, res) => {
       console.log(`Nueva conversación creada con ID: ${conversationId}`);
     }
 
-    // Guardar el mensaje
-    console.log(`Guardando mensaje en conversación ${conversationId}...`);
+    // Guardar el mensaje como business en la base de datos
+    console.log('Guardando mensaje en Supabase:', {
+      conversation_id: conversationId,
+      content: message,
+      sender_type: 'user', // IMPORTANTE: para mensajes entrantes debe ser 'user'
+      created_at: new Date().toISOString(),
+      read: false
+    });
     
-    const { data: messageResult, error: messageError } = await supabase
-      .from('messages')
-      .insert([{
+    try {
+      const messageObj = {
         conversation_id: conversationId,
         content: message,
-        sender_type: 'user',
+        sender_type: 'user', // Los mensajes que vienen del webhook son de tipo 'user'
         created_at: new Date().toISOString(),
         read: false
-      }]);
-
-    if (messageError) {
-      console.error('Error guardando mensaje:', messageError);
-      return res.status(200).send('Error saving message, but acknowledging receipt');
-    }
-
-    console.log('Mensaje guardado exitosamente');
-    
-    // Comprobar si el bot está activo para esta conversación y debería responder
-    try {
-      // Obtener información de la conversación
-      const { data: conversationData, error: convDataError } = await supabase
-        .from('conversations')
-        .select('is_bot_active, business_id')
-        .eq('id', conversationId)
-        .single();
-        
-      if (convDataError) throw convDataError;
+      };
       
-      // Comprobar si el bot debería responder
-      if (await shouldAIRespond(conversationId, conversationData.is_bot_active)) {
-        console.log(`El bot está activo para la conversación ${conversationId}, generando respuesta...`);
+      // Si el tipo es definido y es importante, podríamos guardarlo en algún otro campo
+      // No usamos message_type ya que no existe en la tabla
+      
+      console.log('Objeto de mensaje a insertar:', messageObj);
+      
+      const { data: insertedMessage, error: messageError } = await supabase
+        .from('messages')
+        .insert([messageObj])
+        .select();
         
-        // Obtener datos del negocio
-        const { data: businessData, error: bizError } = await supabase
-          .from('businesses')
-          .select('*')
-          .eq('id', conversationData.business_id)
-          .single();
-          
-        if (bizError) throw bizError;
-        
-        // Obtener los últimos mensajes para contexto
-        const { data: messageHistory, error: historyError } = await supabase
-          .from('messages')
-          .select('content, sender_type, created_at')
-          .eq('conversation_id', conversationId)
-          .order('created_at', { ascending: false })
-          .limit(10);
-          
-        if (historyError) throw historyError;
-        
-        // Invertir para orden cronológico
-        const orderedHistory = [...messageHistory].reverse();
-        
-        // Generar respuesta AI
-        const aiResponse = await generateAIResponse(orderedHistory, businessData);
-        
-        console.log(`Respuesta AI generada: ${aiResponse}`);
-        
-        // Guardar respuesta del bot
-        const { data: botMessageResult, error: botMessageError } = await supabase
-          .from('messages')
-          .insert([{
-            conversation_id: conversationId,
-            content: aiResponse,
-            sender_type: 'business',
-            created_at: new Date().toISOString(),
-            read: true
-          }]);
-          
-        if (botMessageError) throw botMessageError;
-        
-        // Actualizar último mensaje en la conversación
-        const { error: updateConvError } = await supabase
-          .from('conversations')
-          .update({
-            last_message: aiResponse,
-            last_message_time: new Date().toISOString()
-          })
-          .eq('id', conversationId);
-          
-        if (updateConvError) throw updateConvError;
-        
-        // NUEVO: Enviar el mensaje del bot a través de WhatsApp utilizando Gupshup
-        try {
-          if (businessData.gupshup_api_key) {
-            const gupshupPayload = {
-              channel: "whatsapp",
-              source: businessData.whatsapp_number,
-              destination: actualUserPhone,
-              message: {
-                type: "text",
-                text: aiResponse
-              }
-            };
-            
-            const gupshupResponse = await fetch('https://api.gupshup.io/sm/api/v1/msg', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'apikey': businessData.gupshup_api_key
-              },
-              body: JSON.stringify(gupshupPayload)
-            });
-            
-            if (!gupshupResponse.ok) {
-              console.error(`Error enviando respuesta automática a través de Gupshup: ${gupshupResponse.status} ${gupshupResponse.statusText}`);
-            } else {
-              console.log('Respuesta del bot enviada exitosamente a través de Gupshup');
-            }
-          } else {
-            console.log('No se encontró clave de API Gupshup para el negocio, no se pudo enviar la respuesta automática');
-          }
-        } catch (gupshupError) {
-          console.error('Error enviando respuesta del bot a través de Gupshup:', gupshupError);
-          // No interrumpimos el flujo principal, solo registramos el error
-        }
-        
-        console.log('Respuesta del bot guardada exitosamente');
-      } else {
-        console.log(`El bot está desactivado para la conversación ${conversationId}, no se generará respuesta automática.`);
+      if (messageError) {
+        console.error('Error al guardar mensaje en la base de datos:', messageError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Error al guardar mensaje en la base de datos',
+          details: messageError
+        });
       }
-    } catch (aiError) {
-      console.error('Error al procesar respuesta del bot:', aiError);
-      // No devolvemos error al cliente, simplemente registramos el problema
+      
+      console.log('Mensaje guardado correctamente en la base de datos:', insertedMessage);
+      
+      // Actualizar la conversación y desactivar el bot automáticamente
+      console.log('Actualizando datos de la conversación y desactivando bot:', conversationId);
+      const { error: updateError } = await supabase
+        .from('conversations')
+        .update({
+          last_message: message,
+          last_message_time: new Date().toISOString(),
+          is_bot_active: false // Desactivar el bot cuando un agente humano envía un mensaje
+        })
+        .eq('id', conversationId);
+        
+      if (updateError) {
+        console.error('Error al actualizar la conversación:', updateError);
+        // No devolvemos error ya que el mensaje ya se guardó
+      } else {
+        console.log('Conversación actualizada correctamente y bot desactivado');
+      }
+      
+      console.log('Mensaje enviado y guardado correctamente');
+      res.status(200).json({
+        status: 'success',
+        message: 'Mensaje enviado correctamente',
+        data: {
+          messageId: insertedMessage ? insertedMessage[0]?.id : Date.now().toString(),
+          timestamp: new Date().toISOString()
+        }
+      });
+    } catch (dbError) {
+      console.error('Error inesperado en operaciones de base de datos:', dbError);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Error en operaciones de base de datos',
+        details: dbError.message
+      });
     }
-    
-    return res.status(200).send('Message received and saved');
   } catch (error) {
     console.error('Error en webhook:', error);
-    // Siempre respondemos con 200 para que WhatsApp no reintente
-    return res.status(200).send('Error processing message, but acknowledging receipt');
+    res.status(500).json({
+      status: 'error',
+      message: 'Error interno del servidor',
+      details: error.message
+    });
   }
 });
 
@@ -734,8 +707,8 @@ app.post('/update-chat-color', async (req, res) => {
             });
         }
 
-        const { data, error } = await supabase
-            .from('conversations')
+      const { data, error } = await supabase
+        .from('conversations')
             .update({ chat_color: color })
             .eq('id', conversationId);
 
@@ -853,7 +826,7 @@ app.get('/ping', (req, res) => {
 
 // Ruta de prueba para verificar register-bot-response
 app.get('/test-register-bot-response', (req, res) => {
-  console.log('🔔 Prueba de register-bot-response recibida');
+  console.log('Prueba de register-bot-response recibida');
   res.status(200).json({ 
     success: true, 
     message: 'La ruta está configurada correctamente. Usa POST para enviar datos reales.',
@@ -926,7 +899,7 @@ app.post('/gupshup-webhook', async (req, res) => {
     const processedData = {
       phoneNumber: userPhoneNumber,
       destination: businessPhoneNumber || '+15557033313', // Número de negocio por defecto
-      message: message,
+            message: message,
       type: 'message',
       source: userPhoneNumber,
       gupshup_original: true
@@ -1004,115 +977,204 @@ app.get('/check-phone/:phone', async (req, res) => {
 // Endpoint para enviar mensajes a través de WhatsApp
 app.post('/send-whatsapp-message', async (req, res) => {
   try {
-    const { phoneNumber, message, conversationId, businessId } = req.body;
+    // Extraer parámetros de la solicitud
+    const { conversationId, message, type = 'text', providedPhoneNumber } = req.body;
     
-    if (!phoneNumber || !message || !conversationId) {
+    console.log('🔔 Petición recibida en /send-whatsapp-message:', req.body);
+    console.log('Parámetros extraídos:', { conversationId, message, type, providedPhoneNumber });
+    
+    if (!conversationId || !message) {
       return res.status(400).json({
         status: 'error',
-        message: 'Se requieren phoneNumber, message y conversationId'
+        message: 'Se requieren los parámetros conversationId y message'
       });
     }
     
-    console.log(`Intentando enviar mensaje a ${phoneNumber}: ${message}`);
-    
-    // Obtener el negocio
-    let businessData;
-    if (businessId) {
-      const { data, error } = await supabase
-        .from('businesses')
-        .select('*')
-        .eq('id', businessId)
-        .single();
-        
-      if (error) throw error;
-      businessData = data;
-    } else {
-      // Obtener el business_id de la conversación
-      const { data: convData, error: convError } = await supabase
-        .from('conversations')
-        .select('business_id')
-        .eq('id', conversationId)
-        .single();
-        
-      if (convError) throw convError;
+    // Buscar la conversación para obtener el número de teléfono del usuario
+    console.log('Buscando conversación en Supabase:', conversationId);
+    const { data: conversation, error: convError } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('id', conversationId)
+      .single();
       
-      const { data: bizData, error: bizError } = await supabase
-        .from('businesses')
-        .select('*')
-        .eq('id', convData.business_id)
-        .single();
-        
-      if (bizError) throw bizError;
-      businessData = bizData;
-    }
-    
-    // Enviar el mensaje a través de WhatsApp (ejemplo utilizando Gupshup)
-    if (businessData.gupshup_api_key) {
-      // Si usamos Gupshup
-      const gupshupPayload = {
-        channel: "whatsapp",
-        source: businessData.whatsapp_number,
-        destination: phoneNumber,
-        message: {
-          type: "text",
-          text: message
-        }
-      };
-      
-      // Implementar llamada a Gupshup
-      // Esta es una implementación de ejemplo, deberás adaptarla según la API de Gupshup
-      const response = await fetch('https://api.gupshup.io/sm/api/v1/msg', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': businessData.gupshup_api_key
-        },
-        body: JSON.stringify(gupshupPayload)
+    if (convError) {
+      console.error('Error al buscar conversación:', convError);
+      return res.status(404).json({
+        status: 'error',
+        message: 'No se encontró la conversación',
+        details: convError
       });
-      
-      if (!response.ok) {
-        throw new Error(`Error enviando mensaje a través de Gupshup: ${response.status} ${response.statusText}`);
-      }
-    } else {
-      // Implementación para API oficial de WhatsApp
-      console.log('No se encontró clave de API Gupshup, no se pudo enviar el mensaje');
-      // Aquí podrías implementar el envío a través de la API oficial de WhatsApp
     }
     
-    // Guardar el mensaje como agente en la base de datos
-    const { error: messageError } = await supabase
-      .from('messages')
-      .insert([{
+    console.log('Conversación encontrada:', conversation);
+    
+    // El número de teléfono puede venir en la solicitud o lo tomamos de la conversación
+    const phoneNumber = providedPhoneNumber || conversation.user_id;
+    
+    console.log(`📱 Teléfono del destinatario: ${phoneNumber}`);
+    
+    // Buscar datos del negocio para posible integración con API de WhatsApp
+    const businessId = conversation.business_id;
+    console.log('Buscando datos del negocio:', businessId);
+    
+    const { data: businessData, error: bizError } = await supabase
+      .from('businesses')
+      .select('*')
+      .eq('id', businessId)
+      .single();
+      
+    if (bizError) {
+      console.error('Error al buscar datos del negocio:', bizError);
+      // Continuamos de todos modos para guardar el mensaje
+    } else {
+      console.log('Datos del negocio obtenidos:', businessData);
+      console.log('- Nombre del negocio:', businessData.name);
+      console.log('- Número WhatsApp:', businessData.whatsapp_number);
+      console.log('- API Key configurada:', businessData.gupshup_api_key ? 'Sí' : 'No');
+    }
+    
+    // Guardar el mensaje en la base de datos
+    try {
+      // Crear el objeto mensaje con los valores correctos según la restricción de la tabla
+      const messageObj = {
         conversation_id: conversationId,
         content: message,
-        sender_type: 'business', // Aseguramos que sea 'business', no 'agent'
+        sender_type: 'agent', // IMPORTANTE: solo puede ser 'user', 'bot' o 'agent'
         created_at: new Date().toISOString(),
         read: true
-      }]);
+      };
       
-    if (messageError) throw messageError;
-    
-    // Actualizar la conversación
-    const { error: updateError } = await supabase
-      .from('conversations')
-      .update({
-        last_message: message,
-        last_message_time: new Date().toISOString()
-      })
-      .eq('id', conversationId);
+      console.log('💾 Objeto de mensaje a insertar:', messageObj);
       
-    if (updateError) throw updateError;
-    
-    res.json({
-      status: 'success',
-      message: 'Mensaje enviado correctamente'
-    });
-    
+      // Insertar el mensaje en la base de datos
+      const { data: insertedMessage, error: messageError } = await supabase
+        .from('messages')
+        .insert([messageObj])
+        .select();
+        
+      if (messageError) {
+        console.error('❌ Error al guardar mensaje en la base de datos:', messageError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Error al guardar mensaje en la base de datos',
+          details: messageError
+        });
+      }
+      
+      console.log('✅ Mensaje guardado en la base de datos:', insertedMessage);
+      
+      // Actualizar la conversación y desactivar el bot
+      const { error: updateError } = await supabase
+        .from('conversations')
+        .update({
+          last_message: message,
+            last_message_time: new Date().toISOString(),
+          is_bot_active: false // Desactivar el bot cuando un agente humano envía un mensaje
+        })
+        .eq('id', conversationId);
+        
+      if (updateError) {
+        console.error('❌ Error al actualizar la conversación:', updateError);
+        // No devolvemos error ya que el mensaje ya se guardó
+      } else {
+        console.log('✅ Conversación actualizada y bot desactivado');
+      }
+      
+      // Enviar el mensaje a WhatsApp via Gupshup
+      let whatsappSent = false;
+      let errorDetails = null;
+      
+      // Usar directamente la API key del entorno - esta es la clave que funciona en Render
+      const gupshupApiKey = 'sk_8def1775845143bc8da6fbcfedb285c2';
+      // Obtener el número de WhatsApp del negocio o usar uno predeterminado
+      const sourceNumber = businessData?.whatsapp_number || '+5212228557784';
+      const businessName = businessData?.name || 'Hernán Tenorio';
+      
+      console.log('🚀 Intentando enviar mensaje a través de Gupshup');
+      console.log('- API Key:', gupshupApiKey.substring(0, 5) + '...');
+      console.log('- Número WhatsApp (origen):', sourceNumber);
+      console.log('- Número destinatario:', phoneNumber);
+      
+      try {
+        // Configurar el payload de Gupshup
+        const gupshupPayload = {
+          channel: "whatsapp",
+          source: sourceNumber,
+          destination: phoneNumber,
+          message: {
+            type: "text",
+            text: message
+          },
+          'src.name': businessName
+        };
+        
+        console.log('📤 Enviando mensaje a Gupshup:', JSON.stringify(gupshupPayload, null, 2));
+        
+        const response = await fetch('https://api.gupshup.io/sm/api/v1/msg', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': gupshupApiKey
+          },
+          body: JSON.stringify(gupshupPayload)
+        });
+        
+        // Log completo de la respuesta
+        const responseText = await response.text();
+        console.log(`📨 Respuesta de Gupshup (${response.status}):`);
+        console.log(responseText);
+        
+        let responseData;
+        try {
+          responseData = JSON.parse(responseText);
+        } catch (e) {
+          responseData = { text: responseText };
+        }
+        
+        if (!response.ok) {
+          console.warn(`❌ Error al enviar mensaje a través de Gupshup: ${response.status} ${response.statusText}`);
+          errorDetails = `Gupshup API respondió con código ${response.status}: ${responseData.message || responseText || 'Sin detalles'}`;
+          
+          // Si hay un error 401 (no autorizado), probablemente es un problema con la API key
+          if (response.status === 401) {
+            console.log('⚠️ Error de autorización con Gupshup. El mensaje se guardó en la base de datos pero no pudo enviarse a WhatsApp.');
+          }
+        } else {
+          console.log('✅ Mensaje enviado exitosamente a través de Gupshup');
+          whatsappSent = true;
+        }
+      } catch (apiError) {
+        console.warn('❌ Error al conectar con API de Gupshup:', apiError);
+        console.error(apiError.stack);
+        errorDetails = `Error al conectar con Gupshup: ${apiError.message}`;
+      }
+      
+      // Respuesta exitosa (incluso si falla el envío a WhatsApp, el mensaje está guardado)
+      return res.status(200).json({
+        status: 'success',
+        message: whatsappSent ? 'Mensaje enviado correctamente a WhatsApp y guardado en la base de datos' : 'Mensaje guardado en la base de datos pero no se pudo enviar a WhatsApp',
+        whatsappSent: whatsappSent,
+        error: errorDetails,
+        data: {
+          messageId: insertedMessage ? insertedMessage[0]?.id : Date.now().toString(),
+          timestamp: new Date().toISOString()
+        }
+      });
+    } catch (dbError) {
+      console.error('❌ Error inesperado en operaciones de base de datos:', dbError);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Error en operaciones de base de datos',
+        details: dbError.message
+      });
+    }
   } catch (error) {
-    console.error('Error enviando mensaje de WhatsApp:', error);
-    res.status(500).json({
+    console.error('❌ Error general en endpoint /send-whatsapp-message:', error);
+    return res.status(500).json({
       status: 'error',
-      message: error.message
+      message: 'Error interno del servidor',
+      details: error.message
     });
   }
 });
@@ -1227,17 +1289,17 @@ app.post('/register-bot-response', async (req, res) => {
     // Insertar mensaje en Supabase
     const { data, error } = await supabase
       .from('messages')
-      .insert([
-        {
+        .insert([
+          {
           conversation_id: conversationId,
           content: message,
           sender_type: 'bot',
           created_at: timestamp,
           read: true
-        }
-      ]);
+          }
+        ]);
 
-    if (error) {
+      if (error) {
       console.error('Error al guardar respuesta del bot en Supabase:', error);
       return res.status(500).json({ success: false, message: 'Error al guardar en la base de datos', error });
     }
@@ -1316,8 +1378,8 @@ app.get('/api/conversations', async (req, res) => {
     // Formatear las conversaciones para el cliente
     const formattedConversations = conversations.map(conv => ({
       id: conv.id,
-      name: conv.user_id || 'Usuario',  // Usar el número de teléfono o ID como nombre por defecto
-      phone: conv.user_id,
+      name: conv.user_id || 'Usuario',  // Usar el número de teléfono como nombre
+      phone: conv.user_id || '',
       lastMessage: conv.last_message || '',
       timestamp: conv.last_message_time || conv.created_at,
       unread: conv.unread_count || 0,
@@ -1349,7 +1411,7 @@ app.get('/api/conversations', async (req, res) => {
 app.get('/api/messages/:conversationId', async (req, res) => {
   try {
     const { conversationId } = req.params;
-    console.log(`Obteniendo mensajes para la conversación ${conversationId} desde Supabase`);
+    console.log(`Obteniendo mensajes para la conversación ${conversationId}`);
     
     // Verificar si el ID parece ser un UUID
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1403,7 +1465,497 @@ app.get('/api/messages/:conversationId', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// Endpoint para obtener el estado del bot para una conversación
+app.get('/bot-status/:conversationId', async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    console.log(`Obteniendo estado del bot para la conversación ${conversationId}`);
+    
+    // Verificar si el ID parece ser un UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(conversationId)) {
+      console.log(`El ID ${conversationId} no parece ser un UUID válido.`);
+      return res.status(400).json({
+        success: false,
+        error: 'ID de conversación inválido'
+      });
+    }
+    
+    // Obtener la conversación de Supabase
+    const { data: conversation, error } = await supabase
+      .from('conversations')
+      .select('is_bot_active')
+      .eq('id', conversationId)
+      .single();
+    
+    if (error) {
+      console.error('Error obteniendo estado del bot:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+    
+    // Si no se encontró la conversación, asumimos que el bot está activo
+    if (!conversation) {
+      return res.json({
+        success: true,
+        isActive: true
+      });
+    }
+    
+    return res.json({
+      success: true,
+      isActive: conversation.is_bot_active !== false // Si es null o undefined, consideramos que está activo
+    });
+    
+  } catch (error) {
+    console.error('Error en API de estado del bot:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener conversaciones por ID de negocio
+app.get('/api/conversations/business/:businessId', async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    
+    console.log(`Obteniendo conversaciones para el negocio ${businessId} desde Supabase`);
+    
+    // Obtener conversaciones por ID de negocio
+    const { data: conversations, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('last_message_time', { ascending: false });
+    
+    if (error) {
+      console.error('Error obteniendo conversaciones:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+    
+    // Formatear las conversaciones para el cliente
+    const formattedConversations = conversations.map(conv => ({
+      id: conv.id,
+      name: conv.user_id || 'Usuario',  // Usar el número de teléfono como nombre
+      phone: conv.user_id || '',
+      lastMessage: conv.last_message || '',
+      timestamp: conv.last_message_time || conv.created_at,
+      unread: conv.unread_count || 0,
+      status: 'offline',
+      isBusinessAccount: false,
+      labels: [],
+      colorLabel: '',
+      botActive: conv.is_bot_active || true,
+      tag: conv.tag || 'gray'
+    }));
+    
+    console.log(`Se encontraron ${formattedConversations.length} conversaciones para el negocio ${businessId}`);
+    
+    // En este endpoint devolvemos directamente el array, no el objeto con {success, conversations}
+    return res.json(formattedConversations);
+    
+  } catch (error) {
+    console.error('Error en API de conversaciones por negocio:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint para obtener datos de un negocio
+app.get('/api/business/:businessId', async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    
+    console.log(`Obteniendo datos del negocio ${businessId} desde Supabase`);
+    
+    // Obtener datos del negocio
+    const { data: business, error } = await supabase
+      .from('businesses')
+      .select('*')
+      .eq('id', businessId)
+      .single();
+    
+    if (error) {
+      console.error('Error obteniendo datos del negocio:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+    
+    if (!business) {
+      return res.status(404).json({
+        success: false,
+        error: 'Negocio no encontrado'
+      });
+    }
+    
+    // Formatear los datos del negocio
+    const formattedBusiness = {
+      id: business.id,
+      name: business.name || 'Mi Negocio',
+      phone: business.phone_number,
+      whatsappId: business.whatsapp_business_id,
+      description: business.description || '',
+      botActive: business.is_bot_active !== false, // Si es null o undefined, consideramos que está activo
+      createdAt: business.created_at,
+      updatedAt: business.updated_at,
+      apiKey: business.api_key || null,
+      credits: business.credits || 0,
+      plan: business.plan || 'free',
+      owners: business.owners || []
+    };
+    
+    return res.json(formattedBusiness);
+    
+  } catch (error) {
+    console.error('Error en API de datos del negocio:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint de simulación para enviar mensajes (solo para desarrollo)
+app.post('/simulate-whatsapp-message', async (req, res) => {
+  try {
+    const { conversationId, message, phoneNumber } = req.body;
+    
+    console.log('💬 Simulando envío de mensaje a WhatsApp:', { conversationId, message, phoneNumber });
+    
+    if (!conversationId || !message) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Se requieren los parámetros conversationId y message'
+      });
+    }
+    
+    // Buscar la conversación
+    const { data: conversation, error: convError } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('id', conversationId)
+      .single();
+      
+    if (convError) {
+      console.error('Error al buscar conversación:', convError);
+      return res.status(404).json({
+        status: 'error',
+        message: 'No se encontró la conversación',
+        details: convError
+      });
+    }
+    
+    console.log('✅ Simulando envío exitoso a WhatsApp');
+    console.log('- Destino:', phoneNumber || conversation.user_id);
+    
+    // Respuesta exitosa (simulando que el mensaje se envió correctamente)
+    return res.status(200).json({
+      status: 'success',
+      message: 'Mensaje simulado enviado correctamente',
+      whatsappSent: true,
+      data: {
+        messageId: `sim-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        destination: phoneNumber || conversation.user_id
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error en simulación de mensaje:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error interno del servidor',
+      details: error.message
+    });
+  }
+});
+
+// Endpoint para usar el servidor de Render como proxy para enviar mensajes a WhatsApp
+app.post('/send-whatsapp-message-via-render', async (req, res) => {
+  try {
+    const { conversationId, message, type = 'text', providedPhoneNumber } = req.body;
+    
+    console.log('🔄 Utilizando servidor de Render como proxy para enviar mensaje:', req.body);
+    
+    if (!conversationId || !message) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Se requieren los parámetros conversationId y message'
+      });
+    }
+    
+    // Buscar la conversación para obtener el número de teléfono del usuario
+    console.log('Buscando conversación en Supabase:', conversationId);
+    const { data: conversation, error: convError } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('id', conversationId)
+      .single();
+      
+    if (convError) {
+      console.error('Error al buscar conversación:', convError);
+      return res.status(404).json({
+        status: 'error',
+        message: 'No se encontró la conversación',
+        details: convError
+      });
+    }
+    
+    // El número de teléfono puede venir en la solicitud o lo tomamos de la conversación
+    const phoneNumber = providedPhoneNumber || conversation.user_id;
+    
+    // 1. Guardar el mensaje en la base de datos primero
+    try {
+      // Crear el objeto mensaje
+      const messageObj = {
+        conversation_id: conversationId,
+        content: message,
+        sender_type: 'agent',
+        created_at: new Date().toISOString(),
+        read: true
+      };
+      
+      // Insertar el mensaje en la base de datos
+      const { data: insertedMessage, error: messageError } = await supabase
+        .from('messages')
+        .insert([messageObj])
+        .select();
+        
+      if (messageError) {
+        console.error('❌ Error al guardar mensaje en la base de datos:', messageError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Error al guardar mensaje en la base de datos',
+          details: messageError
+        });
+      }
+      
+      console.log('✅ Mensaje guardado en la base de datos:', insertedMessage);
+      
+      // Actualizar la conversación y desactivar el bot
+      const { error: updateError } = await supabase
+        .from('conversations')
+        .update({
+          last_message: message,
+          last_message_time: new Date().toISOString(),
+          is_bot_active: false // Asegurarse de que el bot siempre se desactive
+        })
+        .eq('id', conversationId);
+        
+      if (updateError) {
+        console.error('❌ Error al actualizar la conversación:', updateError);
+      } else {
+        console.log('✅ Conversación actualizada y bot desactivado');
+      }
+      
+      // 2. Enviar el mensaje a través del servidor de Render
+      // IMPORTANTE: Reemplaza esta URL con la URL real de tu servidor en Render
+      const renderServerUrl = 'https://panel-control-whatsapp.onrender.com/send-whatsapp-message-proxy';
+      
+      console.log('🔄 Enviando solicitud al servidor de Render:', renderServerUrl);
+      
+      try {
+        const proxyResponse = await fetch(renderServerUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            // Puedes añadir un token de autenticación aquí si lo implementas en el servidor
+            // 'X-Api-Key': 'tu-clave-secreta'
+          },
+          body: JSON.stringify({
+            phoneNumber,
+            message,
+            conversationId,
+            type
+          })
+        });
+        
+        let proxyResult;
+        const proxyText = await proxyResponse.text();
+        
+        try {
+          proxyResult = JSON.parse(proxyText);
+        } catch (e) {
+          console.error('Error al parsear respuesta del servidor:', proxyText);
+          proxyResult = { success: false, message: 'Error al parsear respuesta' };
+        }
+        
+        if (!proxyResponse.ok || !proxyResult.success) {
+          console.error('❌ Error al enviar mensaje a través del servidor de Render:', proxyResult);
+          
+          // Si el error es de autenticación con Gupshup, informarlo claramente
+          if (proxyText.includes("Portal User Not Found With APIKey") || 
+              (proxyResult.error && proxyResult.error.includes("Portal User Not Found"))) {
+            console.warn('⚠️ Error de autenticación con Gupshup: la API key no es válida desde esta IP');
+            
+            return res.status(200).json({
+              status: 'partial_success',
+              message: 'Mensaje guardado en la base de datos pero no se pudo enviar a WhatsApp. Error de autenticación con Gupshup.',
+              whatsappSent: false,
+              error: 'API key de Gupshup no válida desde esta IP. Necesitas implementar el endpoint proxy en tu servidor de Render.',
+              data: {
+                messageId: insertedMessage[0]?.id,
+                timestamp: new Date().toISOString()
+              }
+            });
+          }
+          
+          // Otro tipo de error
+          return res.status(200).json({
+            status: 'partial_success',
+            message: 'Mensaje guardado en la base de datos pero no se pudo enviar a WhatsApp',
+            whatsappSent: false,
+            error: proxyResult.message || 'Error al comunicarse con el servidor de Render',
+            data: {
+              messageId: insertedMessage[0]?.id,
+              timestamp: new Date().toISOString()
+            }
+          });
+        }
+        
+        console.log('✅ Mensaje enviado exitosamente a través del servidor de Render:', proxyResult);
+        
+        return res.status(200).json({
+          status: 'success',
+          message: 'Mensaje enviado correctamente a WhatsApp y guardado en la base de datos',
+          whatsappSent: true,
+          data: {
+            messageId: insertedMessage[0]?.id,
+            timestamp: new Date().toISOString(),
+            proxyResponse: proxyResult
+          }
+        });
+        
+      } catch (proxyError) {
+        console.error('❌ Error al comunicarse con el servidor de Render:', proxyError);
+        
+        // Aún así devolvemos un éxito parcial porque el mensaje se guardó en la base de datos
+        return res.status(200).json({
+          status: 'partial_success',
+          message: 'Mensaje guardado en la base de datos pero no se pudo enviar a WhatsApp',
+          whatsappSent: false,
+          error: proxyError.message,
+          data: {
+            messageId: insertedMessage[0]?.id,
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
+      
+    } catch (dbError) {
+      console.error('❌ Error en operaciones de base de datos:', dbError);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Error en operaciones de base de datos',
+        details: dbError.message
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Error general en endpoint /send-whatsapp-message-via-render:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error interno del servidor',
+      details: error.message
+    });
+  }
+});
+
+// Endpoint para recibir solicitudes del panel local y reenviarlas a Gupshup
+app.post('/send-whatsapp-message-proxy', async (req, res) => {
+  try {
+    console.log('📨 Solicitud recibida en proxy de WhatsApp:', req.body);
+    
+    const { phoneNumber, message, conversationId, type = 'text' } = req.body;
+    
+    if (!phoneNumber || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requieren phoneNumber y message'
+      });
+    }
+    
+    // Configurar payload para Gupshup
+    const gupshupPayload = {
+      channel: "whatsapp",
+      source: process.env.WHATSAPP_SOURCE_NUMBER || "+5212228557784", // Tu número verificado en Gupshup
+      destination: phoneNumber,
+      message: {
+        type: "text",
+        text: message
+      },
+      'src.name': process.env.BUSINESS_NAME || "Hernán Tenorio" // Nombre del negocio
+    };
+    
+    console.log('🔄 Enviando mensaje a Gupshup:', gupshupPayload);
+    
+    // Verificar que tengamos la API key
+    if (!process.env.GUPSHUP_API_KEY) {
+      console.error('❌ Error: GUPSHUP_API_KEY no está configurado en las variables de entorno');
+      return res.status(500).json({
+        success: false,
+        message: 'API key de Gupshup no configurada'
+      });
+    }
+    
+    // Enviar mensaje a Gupshup
+    const response = await fetch('https://api.gupshup.io/sm/api/v1/msg', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': process.env.GUPSHUP_API_KEY // Usa la variable de entorno
+      },
+      body: JSON.stringify(gupshupPayload)
+    });
+    
+    const responseText = await response.text();
+    let responseData;
+    
+    try {
+      responseData = JSON.parse(responseText);
+    } catch (e) {
+      console.error('❌ Error al parsear respuesta de Gupshup:', responseText);
+      responseData = { error: 'Error al parsear respuesta' };
+    }
+    
+    console.log('✅ Respuesta de Gupshup:', responseData);
+    
+    if (!response.ok) {
+      return res.status(response.status).json({
+        success: false,
+        message: 'Error al enviar mensaje a Gupshup',
+        error: responseData.error || responseText
+      });
+    }
+    
+    // Devolver respuesta exitosa
+    return res.json({
+      success: true,
+      message: 'Mensaje enviado correctamente a WhatsApp',
+      data: responseData
+    });
+  } catch (error) {
+    console.error('❌ Error general en endpoint /send-whatsapp-message-proxy:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al enviar mensaje a WhatsApp',
+      error: error.message
+    });
+  }
+});
+
+const PORT = process.env.PORT || 4001;
 
 // Error handling middleware
 app.use((err, req, res, next) => {

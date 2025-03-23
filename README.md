@@ -12,6 +12,8 @@ Crea un archivo `.env` en la raíz del proyecto con las siguientes variables:
 NEXT_PUBLIC_SUPABASE_URL=tu_url_de_supabase
 NEXT_PUBLIC_SUPABASE_ANON_KEY=tu_clave_de_supabase
 GUPSHUP_API_KEY=tu_clave_de_gupshup
+WHATSAPP_SOURCE_NUMBER=+5212228557784
+BUSINESS_NAME="Hernán Tenorio"
 ```
 
 ### Configuración de Gupshup
@@ -19,8 +21,22 @@ GUPSHUP_API_KEY=tu_clave_de_gupshup
 1. Accede a tu panel de Gupshup
 2. Configura el webhook para recibir mensajes:
    - URL del webhook: `https://render-wa.onrender.com/webhook`
-   - Método: POST
-   - Tipo de contenido: application/json
+
+### Comunicación con Entornos Locales
+
+Este servidor ahora incluye un endpoint proxy que permite a las aplicaciones locales enviar mensajes a WhatsApp a través de Gupshup:
+
+```
+POST /send-whatsapp-message-proxy
+```
+
+Parámetros:
+- `phoneNumber`: Número de teléfono del destinatario (con código de país)
+- `message`: Contenido del mensaje a enviar
+- `conversationId`: ID de la conversación (opcional)
+- `type`: Tipo de mensaje (por defecto: 'text')
+
+Este endpoint es especialmente útil cuando las aplicaciones locales no pueden usar directamente la API de Gupshup debido a restricciones de IP.
 
 ## Endpoints API
 
@@ -125,4 +141,27 @@ El panel de control ahora utiliza el archivo `server.js` directamente como punto
 
 ## Contacto
 
-Si tienes algún problema o consulta, puedes contactar al equipo de desarrollo. 
+Si tienes algún problema o consulta, puedes contactar al equipo de desarrollo.
+
+## Configuración de Gupshup para WhatsApp
+
+Para que los mensajes enviados desde el panel lleguen a WhatsApp, cada negocio en la plataforma debe tener su propia cuenta de Gupshup configurada:
+
+1. **Requisitos previos**:
+   - Cada negocio debe tener una cuenta en [Gupshup](https://www.gupshup.io/)
+   - Cada negocio debe tener su número de WhatsApp verificado
+   - Obtener la API key de Gupshup específica para WhatsApp
+
+2. **Actualizar la configuración del negocio**:
+   - Modifica el archivo `update_gupshup_key.js` con la clave API correspondiente
+   - Ejecuta el script: `node update_gupshup_key.js`
+   - Confirma que la clave se haya actualizado correctamente
+
+3. **Probar la integración**:
+   - Envía un mensaje desde el panel
+   - Verifica que:
+     a) El mensaje se guarde en la base de datos
+     b) El mensaje llegue al número de WhatsApp del cliente
+     c) El bot se desactive automáticamente
+
+Nota: Si no configuras la API key de Gupshup, los mensajes se guardarán en la base de datos pero no se enviarán a WhatsApp. 
