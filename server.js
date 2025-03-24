@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const { supabase } = require('./lib/supabase');
-const multer = require('multer');
 const fetch = require('node-fetch');
 
 const app = express();
