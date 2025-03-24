@@ -320,6 +320,75 @@ app.post('/upload', multer({ storage: multer.memoryStorage() }).single('file'), 
     }
 });
 
+// Almacén en memoria para mensajes pendientes
+const pendingMessages = [];
+
+// Endpoint para que el bot obtenga mensajes pendientes
+app.get('/bot-pending-messages', (req, res) => {
+  console.log('🤖 Bot solicitando mensajes pendientes, hay', pendingMessages.length);
+  
+  // Si no hay mensajes pendientes, enviamos un array vacío
+  if (pendingMessages.length === 0) {
+    return res.json({
+      success: true,
+      messages: []
+    });
+  }
+  
+  // Enviamos todos los mensajes pendientes y limpiamos el array
+  const messages = [...pendingMessages];
+  pendingMessages.length = 0; // Vaciar el array
+  
+  console.log('✅ Enviando', messages.length, 'mensajes pendientes al bot');
+  
+  return res.json({
+    success: true,
+    messages
+  });
+});
+
+// Endpoint para enviar mensaje via bot (utilizando el almacén de mensajes pendientes)
+app.post('/queue-message-for-bot', async (req, res) => {
+  try {
+    const { conversationId, message, phoneNumber, type = 'text' } = req.body;
+    
+    console.log('📋 Encolando mensaje para el bot:', req.body);
+    
+    if (!phoneNumber || !message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Se requieren phoneNumber y message'
+      });
+    }
+    
+    // Encolar el mensaje para que el bot lo recoja
+    const messageId = `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    pendingMessages.push({
+      id: messageId,
+      phone: phoneNumber.replace(/\+/g, ''), // Eliminar el '+' si existe
+      message,
+      type,
+      timestamp: new Date().toISOString()
+    });
+    
+    console.log('✅ Mensaje encolado con ID:', messageId);
+    console.log('📊 Total de mensajes pendientes:', pendingMessages.length);
+    
+    return res.json({
+      success: true,
+      message: 'Mensaje encolado para ser enviado por el bot',
+      messageId
+    });
+  } catch (error) {
+    console.error('❌ Error al encolar mensaje:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error al encolar mensaje',
+      error: error.message
+    });
+  }
+});
+
 // Webhook for receiving WhatsApp messages
 app.post('/webhook', async (req, res) => {
   try {
@@ -1759,93 +1828,33 @@ app.post('/send-whatsapp-message-via-render', async (req, res) => {
         console.log('✅ Conversación actualizada y bot desactivado');
       }
       
-      // 2. Enviar el mensaje a través del servidor de Render
-      // IMPORTANTE: Reemplaza esta URL con la URL real de tu servidor en Render
-      const renderServerUrl = 'https://render-wa.onrender.com/send-whatsapp-message-proxy';
+      // 2. Encolar el mensaje para que el bot lo envíe
+      console.log('🔄 Encolando mensaje para ser enviado por el bot');
       
-      console.log('🔄 Enviando solicitud al servidor de Render:', renderServerUrl);
+      // Llamar a nuestro propio endpoint para encolar el mensaje
+      const queueResponse = await fetch(`http://localhost:4001/queue-message-for-bot`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          phoneNumber,
+          message,
+          type,
+          conversationId
+        })
+      });
       
-      try {
-        const proxyResponse = await fetch(renderServerUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            // Puedes añadir un token de autenticación aquí si lo implementas en el servidor
-            // 'X-Api-Key': 'tu-clave-secreta'
-          },
-          body: JSON.stringify({
-            phoneNumber,
-            message,
-            conversationId,
-            type
-          })
-        });
+      const queueResult = await queueResponse.json();
+      
+      if (!queueResponse.ok || !queueResult.success) {
+        console.error('❌ Error al encolar mensaje para el bot:', queueResult);
         
-        let proxyResult;
-        const proxyText = await proxyResponse.text();
-        
-        try {
-          proxyResult = JSON.parse(proxyText);
-        } catch (e) {
-          console.error('Error al parsear respuesta del servidor:', proxyText);
-          proxyResult = { success: false, message: 'Error al parsear respuesta' };
-        }
-        
-        if (!proxyResponse.ok || !proxyResult.success) {
-          console.error('❌ Error al enviar mensaje a través del servidor de Render:', proxyResult);
-          
-          // Si el error es de autenticación con Gupshup, informarlo claramente
-          if (proxyText.includes("Portal User Not Found With APIKey") || 
-              (proxyResult.error && proxyResult.error.includes("Portal User Not Found"))) {
-            console.warn('⚠️ Error de autenticación con Gupshup: la API key no es válida desde esta IP');
-            
-            return res.status(200).json({
-              status: 'partial_success',
-              message: 'Mensaje guardado en la base de datos pero no se pudo enviar a WhatsApp. Error de autenticación con Gupshup.',
-              whatsappSent: false,
-              error: 'API key de Gupshup no válida desde esta IP. Necesitas implementar el endpoint proxy en tu servidor de Render.',
-              data: {
-                messageId: insertedMessage[0]?.id,
-                timestamp: new Date().toISOString()
-              }
-            });
-          }
-          
-          // Otro tipo de error
-          return res.status(200).json({
-            status: 'partial_success',
-            message: 'Mensaje guardado en la base de datos pero no se pudo enviar a WhatsApp',
-            whatsappSent: false,
-            error: proxyResult.message || 'Error al comunicarse con el servidor de Render',
-            data: {
-              messageId: insertedMessage[0]?.id,
-              timestamp: new Date().toISOString()
-            }
-          });
-        }
-        
-        console.log('✅ Mensaje enviado exitosamente a través del servidor de Render:', proxyResult);
-        
-        return res.status(200).json({
-          status: 'success',
-          message: 'Mensaje enviado correctamente a WhatsApp y guardado en la base de datos',
-          whatsappSent: true,
-          data: {
-            messageId: insertedMessage[0]?.id,
-            timestamp: new Date().toISOString(),
-            proxyResponse: proxyResult
-          }
-        });
-        
-      } catch (proxyError) {
-        console.error('❌ Error al comunicarse con el servidor de Render:', proxyError);
-        
-        // Aún así devolvemos un éxito parcial porque el mensaje se guardó en la base de datos
         return res.status(200).json({
           status: 'partial_success',
-          message: 'Mensaje guardado en la base de datos pero no se pudo enviar a WhatsApp',
+          message: 'Mensaje guardado en la base de datos pero no se pudo encolar para WhatsApp',
           whatsappSent: false,
-          error: proxyError.message,
+          error: queueResult.message || 'Error al encolar mensaje',
           data: {
             messageId: insertedMessage[0]?.id,
             timestamp: new Date().toISOString()
@@ -1853,6 +1862,19 @@ app.post('/send-whatsapp-message-via-render', async (req, res) => {
         });
       }
       
+      console.log('✅ Mensaje encolado exitosamente para el bot:', queueResult);
+      
+      return res.status(200).json({
+        status: 'success',
+        message: 'Mensaje guardado y encolado para ser enviado por el bot',
+        whatsappSent: true,
+        data: {
+          messageId: insertedMessage[0]?.id,
+          timestamp: new Date().toISOString(),
+          queueId: queueResult.messageId
+        }
+      });
+        
     } catch (dbError) {
       console.error('❌ Error en operaciones de base de datos:', dbError);
       return res.status(500).json({
@@ -1886,70 +1908,33 @@ app.post('/send-whatsapp-message-proxy', async (req, res) => {
       });
     }
     
-    // Configurar payload para Gupshup
-    const gupshupPayload = {
-      channel: "whatsapp",
-      source: process.env.WHATSAPP_SOURCE_NUMBER || "+5212228557784", // Tu número verificado en Gupshup
-      destination: phoneNumber,
-      message: {
-        type: "text",
-        text: message
-      },
-      'src.name': process.env.BUSINESS_NAME || "Hernán Tenorio" // Nombre del negocio
-    };
+    // En lugar de enviar directamente a Gupshup, encolamos el mensaje
+    console.log('🔄 Encolando mensaje para el bot del panel');
     
-    console.log('🔄 Enviando mensaje a Gupshup:', gupshupPayload);
-    
-    // Verificar que tengamos la API key
-    if (!process.env.GUPSHUP_API_KEY) {
-      console.error('❌ Error: GUPSHUP_API_KEY no está configurado en las variables de entorno');
-      return res.status(500).json({
-        success: false,
-        message: 'API key de Gupshup no configurada'
-      });
-    }
-    
-    // Enviar mensaje a Gupshup
-    const response = await fetch('https://api.gupshup.io/sm/api/v1/msg', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'apikey': process.env.GUPSHUP_API_KEY // Usa la variable de entorno
-      },
-      body: JSON.stringify(gupshupPayload)
+    // Encolar el mensaje para que el bot lo recoja
+    const messageId = `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    pendingMessages.push({
+      id: messageId,
+      phone: phoneNumber.replace(/\+/g, ''), // Eliminar el '+' si existe
+      message,
+      type,
+      timestamp: new Date().toISOString()
     });
     
-    const responseText = await response.text();
-    let responseData;
-    
-    try {
-      responseData = JSON.parse(responseText);
-    } catch (e) {
-      console.error('❌ Error al parsear respuesta de Gupshup:', responseText);
-      responseData = { error: 'Error al parsear respuesta' };
-    }
-    
-    console.log('✅ Respuesta de Gupshup:', responseData);
-    
-    if (!response.ok) {
-      return res.status(response.status).json({
-        success: false,
-        message: 'Error al enviar mensaje a Gupshup',
-        error: responseData.error || responseText
-      });
-    }
+    console.log('✅ Mensaje encolado con ID:', messageId);
+    console.log('📊 Total de mensajes pendientes:', pendingMessages.length);
     
     // Devolver respuesta exitosa
     return res.json({
       success: true,
-      message: 'Mensaje enviado correctamente a WhatsApp',
-      data: responseData
+      message: 'Mensaje encolado correctamente para ser enviado a WhatsApp',
+      messageId
     });
   } catch (error) {
     console.error('❌ Error general en endpoint /send-whatsapp-message-proxy:', error);
     return res.status(500).json({
       success: false,
-      message: 'Error al enviar mensaje a WhatsApp',
+      message: 'Error al encolar mensaje para WhatsApp',
       error: error.message
     });
   }
