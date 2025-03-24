@@ -1,0 +1,6 @@
+web_addr: 4040
+tunnels:
+  webapp:
+    proto: http
+    addr: 4001
+    inspect: false

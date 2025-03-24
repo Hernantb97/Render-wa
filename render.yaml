@@ -11,6 +11,14 @@ services:
         sync: false
       - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
         sync: false
+      - key: GUPSHUP_API_KEY
+        sync: false
+      - key: WHATSAPP_SOURCE_NUMBER
+        sync: false
+      - key: BUSINESS_NAME
+        sync: false
+    healthCheckPath: /api/health
+    autoDeploy: true
     routes:
       - type: rewrite
         source: /register-bot-response

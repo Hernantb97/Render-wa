@@ -5,6 +5,17 @@ const { supabase } = require('./lib/supabase');
 const multer = require('multer');
 const fetch = require('node-fetch');
 const { generateAIResponse, shouldAIRespond } = require('./lib/ai-service');
+const { Client, LocalAuth } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
+const cors = require('cors');
+const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const next = require('next');
+
+const dev = process.env.NODE_ENV !== 'production';
+const nextApp = next({ dev });
+const handle = nextApp.getRequestHandler();
 
 const app = express();
 
@@ -50,6 +61,23 @@ app.use((req, res, next) => {
 });
 
 app.use(bodyParser.json());
+
+// Initialize Next.js
+nextApp.prepare().then(() => {
+  // Handle all other routes with Next.js
+  app.all('*', (req, res) => {
+    return handle(req, res);
+  });
+
+  const port = process.env.PORT || 3000;
+  app.listen(port, (err) => {
+    if (err) throw err;
+    console.log(`Server is running on port ${port}`);
+  });
+}).catch((ex) => {
+  console.error(ex.stack);
+  process.exit(1);
+});
 
 // Configurar bucket de Supabase Storage
 const BUCKET_NAME = 'chat-attachments';
@@ -1753,143 +1781,63 @@ app.post('/simulate-whatsapp-message', async (req, res) => {
 // Endpoint para usar el servidor de Render como proxy para enviar mensajes a WhatsApp
 app.post('/send-whatsapp-message-via-render', async (req, res) => {
   try {
-    const { conversationId, message, type = 'text', providedPhoneNumber } = req.body;
+    const { conversationId, message, type = 'text', metadata = {} } = req.body;
     
-    console.log('🔄 Utilizando servidor de Render como proxy para enviar mensaje:', req.body);
+    console.log('📨 Solicitud recibida para enviar mensaje a través del bot:', req.body);
     
-    if (!conversationId || !message) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Se requieren los parámetros conversationId y message'
-      });
-    }
-    
-    // Buscar la conversación para obtener el número de teléfono del usuario
-    console.log('Buscando conversación en Supabase:', conversationId);
-    const { data: conversation, error: convError } = await supabase
-      .from('conversations')
-      .select('*')
-      .eq('id', conversationId)
-      .single();
-      
-    if (convError) {
-      console.error('Error al buscar conversación:', convError);
+    // Obtener el número de teléfono de la conversación
+    const conversation = await getConversationById(conversationId);
+    if (!conversation) {
       return res.status(404).json({
-        status: 'error',
-        message: 'No se encontró la conversación',
-        details: convError
+        success: false,
+        message: 'Conversación no encontrada'
       });
     }
     
-    // El número de teléfono puede venir en la solicitud o lo tomamos de la conversación
-    const phoneNumber = providedPhoneNumber || conversation.user_id;
+    const phoneNumber = conversation.phone_number;
     
-    // 1. Guardar el mensaje en la base de datos primero
-    try {
-      // Crear el objeto mensaje
-      const messageObj = {
-        conversation_id: conversationId,
-        content: message,
-        sender_type: 'agent',
-        created_at: new Date().toISOString(),
-        read: true
-      };
-      
-      // Insertar el mensaje en la base de datos
-      const { data: insertedMessage, error: messageError } = await supabase
-        .from('messages')
-        .insert([messageObj])
-        .select();
-        
-      if (messageError) {
-        console.error('❌ Error al guardar mensaje en la base de datos:', messageError);
-        return res.status(500).json({
-          status: 'error',
-          message: 'Error al guardar mensaje en la base de datos',
-          details: messageError
-        });
-      }
-      
-      console.log('✅ Mensaje guardado en la base de datos:', insertedMessage);
-      
-      // Actualizar la conversación y desactivar el bot
-      const { error: updateError } = await supabase
-        .from('conversations')
-        .update({
-          last_message: message,
-          last_message_time: new Date().toISOString(),
-          is_bot_active: false // Asegurarse de que el bot siempre se desactive
-        })
-        .eq('id', conversationId);
-        
-      if (updateError) {
-        console.error('❌ Error al actualizar la conversación:', updateError);
-      } else {
-        console.log('✅ Conversación actualizada y bot desactivado');
-      }
-      
-      // 2. Encolar el mensaje para que el bot lo envíe
-      console.log('🔄 Encolando mensaje para ser enviado por el bot');
-      
-      // Llamar a nuestro propio endpoint para encolar el mensaje
-      const queueResponse = await fetch(`http://localhost:4001/queue-message-for-bot`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          phoneNumber,
-          message,
-          type,
-          conversationId
-        })
-      });
-      
-      const queueResult = await queueResponse.json();
-      
-      if (!queueResponse.ok || !queueResult.success) {
-        console.error('❌ Error al encolar mensaje para el bot:', queueResult);
-        
-        return res.status(200).json({
-          status: 'partial_success',
-          message: 'Mensaje guardado en la base de datos pero no se pudo encolar para WhatsApp',
-          whatsappSent: false,
-          error: queueResult.message || 'Error al encolar mensaje',
-          data: {
-            messageId: insertedMessage[0]?.id,
-            timestamp: new Date().toISOString()
-          }
-        });
-      }
-      
-      console.log('✅ Mensaje encolado exitosamente para el bot:', queueResult);
-      
-      return res.status(200).json({
-        status: 'success',
-        message: 'Mensaje guardado y encolado para ser enviado por el bot',
-        whatsappSent: true,
-        data: {
-          messageId: insertedMessage[0]?.id,
-          timestamp: new Date().toISOString(),
-          queueId: queueResult.messageId
-        }
-      });
-        
-    } catch (dbError) {
-      console.error('❌ Error en operaciones de base de datos:', dbError);
+    // Enviar mensaje al bot en Render
+    const response = await fetch('https://whatsapp-bot-main.onrender.com/send-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        phone: phoneNumber,
+        message,
+        type,
+        ...metadata
+      })
+    });
+    
+    const responseData = await response.json();
+    
+    if (!response.ok) {
+      console.error('❌ Error al enviar mensaje al bot:', responseData);
       return res.status(500).json({
-        status: 'error',
-        message: 'Error en operaciones de base de datos',
-        details: dbError.message
+        success: false,
+        message: 'Error al enviar mensaje al bot',
+        error: responseData.error
       });
     }
     
+    // Guardar el mensaje en la base de datos
+    const savedMessage = await saveMessage(conversationId, message, 'agent');
+    
+    return res.json({
+      success: true,
+      message: 'Mensaje enviado exitosamente',
+      data: {
+        messageId: savedMessage.id,
+        timestamp: savedMessage.created_at
+      }
+    });
   } catch (error) {
-    console.error('❌ Error general en endpoint /send-whatsapp-message-via-render:', error);
+    console.error('❌ Error general al enviar mensaje:', error);
     return res.status(500).json({
-      status: 'error',
-      message: 'Error interno del servidor',
-      details: error.message
+      success: false,
+      message: 'Error al enviar mensaje',
+      error: error.message
     });
   }
 });
@@ -1908,70 +1856,190 @@ app.post('/send-whatsapp-message-proxy', async (req, res) => {
       });
     }
     
-    // En lugar de enviar directamente a Gupshup, encolamos el mensaje
-    console.log('🔄 Encolando mensaje para el bot del panel');
+    // Configurar payload para Gupshup
+    const gupshupPayload = {
+      channel: "whatsapp",
+      source: process.env.WHATSAPP_SOURCE_NUMBER || "+5212228557784", // Tu número verificado en Gupshup
+      destination: phoneNumber,
+      message: {
+        type: "text",
+        text: message
+      },
+      'src.name': process.env.BUSINESS_NAME || "Hernán Tenorio" // Nombre del negocio
+    };
     
-    // Encolar el mensaje para que el bot lo recoja
-    const messageId = `msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    pendingMessages.push({
-      id: messageId,
-      phone: phoneNumber.replace(/\+/g, ''), // Eliminar el '+' si existe
-      message,
-      type,
-      timestamp: new Date().toISOString()
+    console.log('🔄 Enviando mensaje a Gupshup:', gupshupPayload);
+    
+    // Verificar que tengamos la API key
+    if (!process.env.GUPSHUP_API_KEY) {
+      console.error('❌ Error: GUPSHUP_API_KEY no está configurado en las variables de entorno');
+      return res.status(500).json({
+        success: false,
+        message: 'API key de Gupshup no configurada'
+      });
+    }
+    
+    // Enviar mensaje a Gupshup
+    const response = await fetch('https://api.gupshup.io/sm/api/v1/msg', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': process.env.GUPSHUP_API_KEY // Usa la variable de entorno
+      },
+      body: JSON.stringify(gupshupPayload)
     });
     
-    console.log('✅ Mensaje encolado con ID:', messageId);
-    console.log('📊 Total de mensajes pendientes:', pendingMessages.length);
+    const responseText = await response.text();
+    let responseData;
+    
+    try {
+      responseData = JSON.parse(responseText);
+    } catch (e) {
+      console.error('❌ Error al parsear respuesta de Gupshup:', responseText);
+      responseData = { error: 'Error al parsear respuesta' };
+    }
+    
+    console.log('✅ Respuesta de Gupshup:', responseData);
+    
+    if (!response.ok) {
+      return res.status(response.status).json({
+        success: false,
+        message: 'Error al enviar mensaje a Gupshup',
+        error: responseData.error || responseText
+      });
+    }
     
     // Devolver respuesta exitosa
     return res.json({
       success: true,
-      message: 'Mensaje encolado correctamente para ser enviado a WhatsApp',
-      messageId
+      message: 'Mensaje enviado correctamente a WhatsApp',
+      data: responseData
     });
   } catch (error) {
     console.error('❌ Error general en endpoint /send-whatsapp-message-proxy:', error);
     return res.status(500).json({
       success: false,
-      message: 'Error al encolar mensaje para WhatsApp',
+      message: 'Error al enviar mensaje a WhatsApp',
       error: error.message
     });
   }
 });
 
-const PORT = process.env.PORT || 4001;
+// URL del servidor local
+const LOCAL_SERVER_URL = 'https://render-wa.onrender.com';
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  res.status(500).json({
-    status: 'error',
-    message: 'Internal server error'
-  });
+// Configuración del cliente de WhatsApp
+const client = new Client({
+    authStrategy: new LocalAuth(),
+    puppeteer: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    }
 });
 
-// Start server with error handling
-const server = app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-}).on('error', (err) => {
-  console.error(`⚠️ Error al iniciar el servidor en puerto ${PORT}:`, err.message);
-  process.exit(1);
+// Variables de estado
+let isAuthenticated = false;
+let isReady = false;
+
+// Función para verificar mensajes pendientes
+async function checkPendingMessages() {
+    try {
+        console.log('Verificando mensajes pendientes...');
+        const response = await axios.get(`${LOCAL_SERVER_URL}/bot-pending-messages`);
+        const messages = response.data;
+
+        if (messages && messages.length > 0) {
+            console.log(`Encontrados ${messages.length} mensajes pendientes`);
+            for (const message of messages) {
+                try {
+                    console.log('Enviando mensaje:', message);
+                    await client.sendMessage(message.phone, message.message);
+                    console.log('Mensaje enviado exitosamente');
+                    
+                    // Marcar como enviado
+                    await axios.post(`${LOCAL_SERVER_URL}/mark-message-sent`, {
+                        messageId: message._id
+                    });
+                } catch (error) {
+                    console.error('Error al enviar mensaje:', error.message);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error al verificar mensajes pendientes:', error.message);
+    }
+}
+
+// Eventos del cliente
+client.on('qr', (qr) => {
+    console.log('QR RECEIVED', qr);
+    qrcode.generate(qr, { small: true });
 });
 
-// Handle process termination
-process.on('SIGTERM', () => {
-  console.log('Recibida señal SIGTERM, cerrando servidor...');
-  server.close(() => {
-    console.log('Servidor cerrado.');
-    process.exit(0);
-  });
+client.on('ready', () => {
+    console.log('Client is ready!');
+    // Iniciar verificación periódica de mensajes pendientes
+    setInterval(checkPendingMessages, 10000);
 });
 
-process.on('SIGINT', () => {
-  console.log('Recibida señal SIGINT, cerrando servidor...');
-  server.close(() => {
-    console.log('Servidor cerrado.');
-    process.exit(0);
-  });
+client.on('authenticated', () => {
+    console.log('Client is authenticated!');
+});
+
+client.on('auth_failure', (msg) => {
+    console.error('AUTHENTICATION FAILURE', msg);
+});
+
+client.on('disconnected', (reason) => {
+    console.log('Client was disconnected', reason);
+});
+
+client.on('message', async msg => {
+    try {
+        console.log('Mensaje recibido:', msg.body);
+        const response = await axios.post(`${LOCAL_SERVER_URL}/whatsapp-webhook`, {
+            message: msg.body,
+            from: msg.from,
+            timestamp: msg.timestamp
+        });
+        console.log('Respuesta del webhook:', response.data);
+    } catch (error) {
+        console.error('Error al procesar mensaje:', error.message);
+    }
+});
+
+// Iniciar el cliente
+client.initialize();
+
+// Endpoints
+app.get('/bot-status', (req, res) => {
+    res.json({
+        status: client.info ? 'ready' : 'initializing',
+        isAuthenticated: client.isAuthenticated()
+    });
+});
+
+app.post('/send-message', async (req, res) => {
+    try {
+        const { phone, message } = req.body;
+        if (!phone || !message) {
+            return res.status(400).json({ error: 'Phone and message are required' });
+        }
+
+        await client.sendMessage(phone, message);
+        res.json({ success: true, message: 'Message sent successfully' });
+    } catch (error) {
+        console.error('Error sending message:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/restart-bot', async (req, res) => {
+    try {
+        await client.destroy();
+        await client.initialize();
+        res.json({ success: true, message: 'Bot restarted successfully' });
+    } catch (error) {
+        console.error('Error restarting bot:', error);
+        res.status(500).json({ error: error.message });
+    }
 });
